@@ -343,7 +343,7 @@ describe('DayPlanSidebar', () => {
     render(<DayPlanSidebar {...makeDefaultProps({ canUndo: true, lastActionLabel: 'Removed place', onUndo })} />)
     // The undo button should be present (Undo2 icon)
     const undoButtons = screen.getAllByRole('button')
-    const undoBtn = undoButtons.find(btn => !btn.disabled && btn.querySelector('svg'))
+    const undoBtn = undoButtons.find(btn => !(btn as HTMLButtonElement).disabled && btn.querySelector('svg'))
     expect(undoBtn).toBeDefined()
   })
 
@@ -502,7 +502,7 @@ describe('DayPlanSidebar', () => {
   // ── Budget footer ───────────────────────────────────────────────────────
 
   it('FE-PLANNER-DAYPLAN-037: budget footer shows total cost when places have prices', () => {
-    const place = buildPlace({ name: 'Eiffel Tower', price: '25.00' })
+    const place = buildPlace({ name: 'Eiffel Tower', price: 25 })
     const day = buildDay({ id: 10, date: '2025-06-01', title: 'Day 1' })
     const assignment = buildAssignment({ id: 99, day_id: 10, order_index: 0, place })
     render(<DayPlanSidebar {...makeDefaultProps({
@@ -1393,7 +1393,7 @@ describe('DayPlanSidebar', () => {
     const assignment = buildAssignment({ id: 11, day_id: 10, order_index: 0, place })
     const flight = buildReservation({
       id: 77, trip_id: 1, type: 'flight', status: 'confirmed',
-      date: '2025-06-01', reservation_time: '2025-06-01T10:00:00Z',
+      reservation_time: '2025-06-01T10:00:00Z',
     })
     render(<DayPlanSidebar {...makeDefaultProps({
       days: [day], places: [place],
@@ -1553,7 +1553,7 @@ describe('DayPlanSidebar', () => {
     const a2 = buildAssignment({ id: 22, day_id: 10, order_index: 1, place: placeB })
     const flight = buildReservation({
       id: 77, trip_id: 1, type: 'flight', status: 'confirmed',
-      date: '2025-06-01', reservation_time: '2025-06-01T12:00:00Z',
+      reservation_time: '2025-06-01T12:00:00Z',
     })
     render(<DayPlanSidebar {...makeDefaultProps({
       days: [day], places: [placeA, placeB],

@@ -3,18 +3,13 @@ interface DragDataPayload { placeId?: string; assignmentId?: string; noteId?: st
 declare global { interface Window { __dragData: DragDataPayload | null } }
 
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react'
-import ReactDOM from 'react-dom'
-import { ChevronDown, ChevronRight, ChevronUp, ChevronsDownUp, ChevronsUpDown, Navigation, RotateCcw, ExternalLink, Clock, Pencil, GripVertical, Ticket, Plus, FileText, Check, Trash2, Info, MapPin, Star, Heart, Camera, Lightbulb, Flag, Bookmark, Train, Bus, Plane, Car, Ship, Coffee, ShoppingBag, AlertTriangle, FileDown, Lock, Hotel, Utensils, Users, Undo2, X, Footprints, Route as RouteIcon } from 'lucide-react'
-
-const RES_ICONS = { flight: Plane, hotel: Hotel, restaurant: Utensils, train: Train, car: Car, cruise: Ship, event: Ticket, tour: Users, other: FileText }
+import { ChevronDown, ChevronRight, ChevronUp, Navigation, RotateCcw, ExternalLink, Clock, Pencil, GripVertical, Ticket, Plus, FileText, Trash2, Car, Lock, Hotel, Footprints, Route as RouteIcon } from 'lucide-react'
 import { assignmentsApi, reservationsApi } from '../../api/client'
-import { downloadTripPDF } from '../PDF/TripPDF'
 import { calculateRoute, calculateRouteWithLegs, optimizeRoute } from '../Map/RouteCalculator'
 import PlaceAvatar from '../shared/PlaceAvatar'
 import { useContextMenu, ContextMenu } from '../shared/ContextMenu'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import remarkBreaks from 'remark-breaks'
 import WeatherWidget from '../Weather/WeatherWidget'
 import { useToast } from '../shared/Toast'
 import { getCategoryIcon } from '../shared/categoryIcons'
@@ -28,133 +23,17 @@ import {
   getTransportForDay as _getTransportForDay, getMergedItems as _getMergedItems,
   type MergedItem,
 } from '../../utils/dayMerge'
-import { formatDate, formatTime, dayTotalCost, currencyDecimals, splitReservationDateTime } from '../../utils/formatters'
+import { formatDate, formatTime, dayTotalCost, splitReservationDateTime } from '../../utils/formatters'
 import { useDayNotes } from '../../hooks/useDayNotes'
-import Tooltip from '../shared/Tooltip'
-import type { Trip, Day, Place, Category, Assignment, Reservation, AssignmentsMap, RouteResult, RouteSegment } from '../../types'
-
-const NOTE_ICONS = [
-  { id: 'FileText', Icon: FileText },
-  { id: 'Info', Icon: Info },
-  { id: 'Clock', Icon: Clock },
-  { id: 'MapPin', Icon: MapPin },
-  { id: 'Navigation', Icon: Navigation },
-  { id: 'Train', Icon: Train },
-  { id: 'Plane', Icon: Plane },
-  { id: 'Bus', Icon: Bus },
-  { id: 'Car', Icon: Car },
-  { id: 'Ship', Icon: Ship },
-  { id: 'Coffee', Icon: Coffee },
-  { id: 'Ticket', Icon: Ticket },
-  { id: 'Star', Icon: Star },
-  { id: 'Heart', Icon: Heart },
-  { id: 'Camera', Icon: Camera },
-  { id: 'Flag', Icon: Flag },
-  { id: 'Lightbulb', Icon: Lightbulb },
-  { id: 'AlertTriangle', Icon: AlertTriangle },
-  { id: 'ShoppingBag', Icon: ShoppingBag },
-  { id: 'Bookmark', Icon: Bookmark },
-]
-const NOTE_ICON_MAP = Object.fromEntries(NOTE_ICONS.map(({ id, Icon }) => [id, Icon]))
-function getNoteIcon(iconId) { return NOTE_ICON_MAP[iconId] || FileText }
-
-const TYPE_ICONS = {
-  flight: '✈️', hotel: '🏨', restaurant: '🍽️', train: '🚆',
-  car: '🚗', cruise: '🚢', event: '🎫', other: '📋',
-}
-
-function MobileAddPlaceButton({ dayId, places, assignments, onAssign, onAddNew }: {
-  dayId: number
-  places: Place[]
-  assignments: AssignmentsMap
-  onAssign?: (placeId: number, dayId: number) => void
-  onAddNew?: () => void
-}) {
-  const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
-  const [search, setSearch] = useState('')
-
-  // Find places not assigned to this day
-  const assignedToDay = new Set((assignments[String(dayId)] || []).map(a => a.place_id))
-  const available = places.filter(p => !assignedToDay.has(p.id))
-  const filtered = search.trim()
-    ? available.filter(p => p.name.toLowerCase().includes(search.toLowerCase()))
-    : available
-
-  return (
-    <div className="md:hidden" style={{ padding: '8px 12px 12px' }}>
-      {!open ? (
-        <button
-          onClick={e => { e.stopPropagation(); setOpen(true) }}
-          style={{
-            width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-            padding: '10px 0', borderRadius: 12,
-            border: '1.5px dashed var(--border-primary)',
-            background: 'transparent', color: 'var(--text-muted)',
-            fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
-          }}
-        >
-          <Plus size={14} />
-          Add Place
-        </button>
-      ) : (
-        <div style={{ borderRadius: 14, border: '1px solid var(--border-primary)', background: 'var(--bg-card)', overflow: 'hidden' }}>
-          <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border-faint)', display: 'flex', gap: 6 }}>
-            <input
-              autoFocus
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder={t('dayplan.mobile.searchPlaces')}
-              style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: 13, fontFamily: 'inherit', color: 'var(--text-primary)' }}
-            />
-            <button onClick={() => { setOpen(false); setSearch('') }} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: 'var(--text-faint)' }}>
-              <X size={14} />
-            </button>
-          </div>
-          <div style={{ maxHeight: 200, overflowY: 'auto' }}>
-            {filtered.length === 0 && (
-              <div style={{ padding: '16px 12px', textAlign: 'center', fontSize: 12, color: 'var(--text-faint)' }}>
-                {available.length === 0 ? t('dayplan.mobile.allAssigned') : t('dayplan.mobile.noMatch')}
-              </div>
-            )}
-            {filtered.slice(0, 20).map(p => (
-              <button
-                key={p.id}
-                onClick={() => {
-                  onAssign?.(p.id, dayId)
-                  setOpen(false)
-                  setSearch('')
-                }}
-                style={{
-                  width: '100%', display: 'flex', alignItems: 'center', gap: 8,
-                  padding: '10px 12px', border: 'none', background: 'transparent',
-                  cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
-                }}
-              >
-                <MapPin size={13} style={{ color: 'var(--text-faint)', flexShrink: 0 }} />
-                <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
-              </button>
-            ))}
-          </div>
-          {onAddNew && (
-            <button
-              onClick={() => { onAddNew(); setOpen(false); setSearch('') }}
-              style={{
-                width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                padding: '10px 0', borderTop: '1px solid var(--border-faint)',
-                background: 'transparent', border: 'none', color: 'var(--text-muted)',
-                fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
-              }}
-            >
-              <Plus size={13} />
-              Create new place
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
+import { RES_ICONS, getNoteIcon } from './DayPlanSidebar.constants'
+import { RouteConnector } from './DayPlanSidebarRouteConnector'
+import { MobileAddPlaceButton } from './DayPlanSidebarMobileAddPlaceButton'
+import { DayPlanSidebarToolbar } from './DayPlanSidebarToolbar'
+import { DayPlanSidebarNoteModal } from './DayPlanSidebarNoteModal'
+import { DayPlanSidebarTimeConfirmModal } from './DayPlanSidebarTimeConfirmModal'
+import { DayPlanSidebarTransportDetailModal } from './DayPlanSidebarTransportDetailModal'
+import { DayPlanSidebarFooter } from './DayPlanSidebarFooter'
+import type { Trip, Day, Place, Category, Assignment, Accommodation, Reservation, AssignmentsMap, RouteResult, RouteSegment, DayNote } from '../../types'
 
 interface DayPlanSidebarProps {
   tripId: number
@@ -166,23 +45,23 @@ interface DayPlanSidebarProps {
   selectedDayId: number | null
   selectedPlaceId: number | null
   selectedAssignmentId: number | null
-  onSelectDay: (dayId: number | null) => void
-  onPlaceClick: (placeId: number) => void
+  onSelectDay: (dayId: number | null, skipFit?: boolean) => void
+  onPlaceClick: (placeId: number | null, assignmentId?: number | null) => void
   onDayDetail: (day: Day) => void
-  accommodations?: Assignment[]
+  accommodations?: Accommodation[]
   onReorder: (dayId: number, orderedIds: number[]) => void
   onUpdateDayTitle: (dayId: number, title: string) => void
-  onRouteCalculated: (dayId: number, route: RouteResult | null) => void
-  onAssignToDay: (placeId: number, dayId: number) => void
-  onRemoveAssignment: (assignmentId: number, dayId: number) => void
-  onEditPlace: (place: Place) => void
+  onRouteCalculated: (route: RouteResult | null) => void
+  onAssignToDay: (placeId: number, dayId: number, position?: number) => void
+  onRemoveAssignment: (dayId: number, assignmentId: number) => void
+  onEditPlace: (place: Place, assignmentId?: number) => void
   onDeletePlace: (placeId: number) => void
   reservations?: Reservation[]
   visibleConnectionIds?: number[]
   onToggleConnection?: (reservationId: number) => void
   externalTransportDetail?: Reservation | null
   onExternalTransportDetailHandled?: () => void
-  onAddReservation: () => void
+  onAddReservation: (dayId: number) => void
   onNavigateToFiles?: () => void
   routeShown?: boolean
   routeProfile?: 'driving' | 'walking'
@@ -204,26 +83,14 @@ interface DayPlanSidebarProps {
   onScrollTopChange?: (top: number) => void
 }
 
-/** Slim travel-time connector shown between two consecutive located stops in a day. */
-function RouteConnector({ seg, profile }: { seg: RouteSegment; profile: 'driving' | 'walking' }) {
-  const driving = profile === 'driving'
-  const Icon = driving ? Car : Footprints
-  const line = { flex: 1, height: 1, minHeight: 1, alignSelf: 'center', background: 'var(--border-primary)' }
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 14px', fontSize: 10.5, color: 'var(--text-faint)', lineHeight: 1.2 }}>
-      <div style={line} />
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-        <Icon size={11} strokeWidth={2} />
-        <span>{seg.durationText ?? (driving ? seg.drivingText : seg.walkingText)}</span>
-        <span style={{ opacity: 0.4 }}>·</span>
-        <span>{seg.distanceText}</span>
-      </div>
-      <div style={line} />
-    </div>
-  )
-}
-
-const DayPlanSidebar = React.memo(function DayPlanSidebar({
+/**
+ * Day-plan state + behaviour: expand/collapse, inline title edit, route legs +
+ * optimisation, day notes, and the drag-and-drop reorder/move machinery across
+ * days (places, transports, notes). Returns everything the timeline view renders
+ * from, keeping DayPlanSidebar a thin shell over one large day list.
+ */
+function useDayPlanSidebar(props: DayPlanSidebarProps) {
+  const {
   tripId,
   trip, days, places, categories, assignments,
   selectedDayId, selectedPlaceId, selectedAssignmentId,
@@ -255,7 +122,7 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
   onAddBookingToAssignment,
   initialScrollTop,
   onScrollTopChange,
-}: DayPlanSidebarProps) {
+  } = props
   const toast = useToast()
   const { t, language, locale } = useTranslation()
   const ctxMenu = useContextMenu()
@@ -269,9 +136,9 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
   const [expandedDays, setExpandedDays] = useState(() => {
     try {
       const saved = sessionStorage.getItem(`day-expanded-${tripId}`)
-      if (saved) return new Set(JSON.parse(saved))
+      if (saved) return new Set<number>(JSON.parse(saved) as number[])
     } catch {}
-    return new Set(days.map(d => d.id))
+    return new Set<number>(days.map(d => d.id))
   })
   useEffect(() => { onExpandedDaysChange?.(expandedDays) }, [expandedDays])
   const [editingDayId, setEditingDayId] = useState(null)
@@ -579,12 +446,12 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
     return !simItems.every((item, i) => i === 0 || item.minutes >= simItems[i - 1].minutes)
   }
 
-  const openEditNote = (dayId, note, e) => {
+  const openEditNote = (dayId: number, note: DayNote, e?: React.MouseEvent) => {
     e?.stopPropagation()
     _openEditNote(dayId, note)
   }
 
-  const deleteNote = async (dayId, noteId, e) => {
+  const deleteNote = async (dayId: number, noteId: number, e?: React.MouseEvent) => {
     e?.stopPropagation()
     await _deleteNote(dayId, noteId)
   }
@@ -800,7 +667,7 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
     try {
       const result = await calculateRoute(waypoints, 'walking')
       // Luftlinien zwischen Wegpunkten anzeigen
-      const lineCoords = waypoints.map(p => [p.lat, p.lng])
+      const lineCoords = waypoints.map(p => [p.lat, p.lng] as [number, number])
       setRouteInfo({ distance: result.distanceText, duration: result.durationText })
       onRouteCalculated?.({ ...result, coordinates: lineCoords })
     } catch { toast.error(t('dayplan.toast.routeError')) }
@@ -913,179 +780,320 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
 
   const totalCost = useMemo(() => days.reduce((s, d) => {
     const da = assignments[String(d.id)] || []
-    return s + da.reduce((s2, a) => s2 + (parseFloat(a.place?.price) || 0), 0)
+    return s + da.reduce((s2, a) => s2 + (Number(a.place?.price) || 0), 0)
   }, 0), [days, assignments])
 
   // Bester verfügbarer Standort für Wetter: zugewiesene Orte zuerst, dann beliebiger Reiseort
   const anyGeoAssignment = Object.values(assignments).flatMap(da => da).find(a => a.place?.lat && a.place?.lng)
   const anyGeoPlace = anyGeoAssignment || (places || []).find(p => p.lat && p.lng)
 
+  return {
+    tripId,
+    trip,
+    days,
+    places,
+    categories,
+    assignments,
+    selectedDayId,
+    selectedPlaceId,
+    selectedAssignmentId,
+    onSelectDay,
+    onPlaceClick,
+    onDayDetail,
+    accommodations,
+    onReorder,
+    onUpdateDayTitle,
+    onRouteCalculated,
+    onAssignToDay,
+    onRemoveAssignment,
+    onEditPlace,
+    onDeletePlace,
+    reservations,
+    visibleConnectionIds,
+    onToggleConnection,
+    externalTransportDetail,
+    onExternalTransportDetailHandled,
+    onAddReservation,
+    onAddPlace,
+    onAddPlaceToDay,
+    onNavigateToFiles,
+    routeShown,
+    routeProfile,
+    onToggleRoute,
+    onSetRouteProfile,
+    onExpandedDaysChange,
+    pushUndo,
+    canUndo,
+    lastActionLabel,
+    onUndo,
+    onRouteRefresh,
+    onAddTransport,
+    onEditTransport,
+    onEditReservation,
+    onAddBookingToAssignment,
+    initialScrollTop,
+    onScrollTopChange,
+    toast,
+    t,
+    language,
+    locale,
+    ctxMenu,
+    timeFormat,
+    tripActions,
+    can,
+    canEditDays,
+    noteUi,
+    setNoteUi,
+    noteInputRef,
+    dayNotes,
+    openAddNote,
+    openEditNote,
+    cancelNote,
+    saveNote,
+    deleteNote,
+    moveNote,
+    expandedDays,
+    setExpandedDays,
+    editingDayId,
+    setEditingDayId,
+    editTitle,
+    setEditTitle,
+    isCalculating,
+    setIsCalculating,
+    routeInfo,
+    setRouteInfo,
+    routeLegs,
+    setRouteLegs,
+    legsAbortRef,
+    draggingId,
+    setDraggingId,
+    lockedIds,
+    setLockedIds,
+    lockHoverId,
+    setLockHoverId,
+    undoHover,
+    setUndoHover,
+    pdfHover,
+    setPdfHover,
+    icsHover,
+    setIcsHover,
+    hoveredAssignmentId,
+    setHoveredAssignmentId,
+    dropTargetKey,
+    _setDropTargetKey,
+    dropTargetRef,
+    setDropTargetKey,
+    dragOverDayId,
+    setDragOverDayId,
+    transportDetail,
+    setTransportDetail,
+    transportPosVersion,
+    setTransportPosVersion,
+    timeConfirm,
+    setTimeConfirm,
+    inputRef,
+    dragDataRef,
+    scrollContainerRef,
+    initedTransportIds,
+    lastAutoScrolledIdRef,
+    currency,
+    getDragData,
+    prevDayCount,
+    toggleDay,
+    getSpanLabel,
+    getDayOrder,
+    computeMultiDayMove,
+    getTransportForDay,
+    getActiveRentalsForDay,
+    getDayAssignments,
+    computeTransportPosition,
+    initTransportPositions,
+    getMergedItems,
+    mergedItemsMap,
+    wouldBreakChronology,
+    applyMergedOrder,
+    handleMergedDrop,
+    confirmTimeRemoval,
+    startEditTitle,
+    saveTitle,
+    handleCalculateRoute,
+    toggleLock,
+    handleOptimize,
+    handleDropOnDay,
+    handleDropOnRow,
+    totalCost,
+    anyGeoAssignment,
+    anyGeoPlace,
+  }
+}
+
+const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarProps) {
+  const S = useDayPlanSidebar(props)
+  const {
+    tripId,
+    trip,
+    days,
+    places,
+    categories,
+    assignments,
+    selectedDayId,
+    selectedPlaceId,
+    selectedAssignmentId,
+    onSelectDay,
+    onPlaceClick,
+    onDayDetail,
+    accommodations,
+    onReorder,
+    onUpdateDayTitle,
+    onRouteCalculated,
+    onAssignToDay,
+    onRemoveAssignment,
+    onEditPlace,
+    onDeletePlace,
+    reservations,
+    visibleConnectionIds,
+    onToggleConnection,
+    externalTransportDetail,
+    onExternalTransportDetailHandled,
+    onAddReservation,
+    onAddPlace,
+    onAddPlaceToDay,
+    onNavigateToFiles,
+    routeShown,
+    routeProfile,
+    onToggleRoute,
+    onSetRouteProfile,
+    onExpandedDaysChange,
+    pushUndo,
+    canUndo,
+    lastActionLabel,
+    onUndo,
+    onRouteRefresh,
+    onAddTransport,
+    onEditTransport,
+    onEditReservation,
+    onAddBookingToAssignment,
+    initialScrollTop,
+    onScrollTopChange,
+    toast,
+    t,
+    language,
+    locale,
+    ctxMenu,
+    timeFormat,
+    tripActions,
+    can,
+    canEditDays,
+    noteUi,
+    setNoteUi,
+    noteInputRef,
+    dayNotes,
+    openAddNote,
+    openEditNote,
+    cancelNote,
+    saveNote,
+    deleteNote,
+    moveNote,
+    expandedDays,
+    setExpandedDays,
+    editingDayId,
+    setEditingDayId,
+    editTitle,
+    setEditTitle,
+    isCalculating,
+    setIsCalculating,
+    routeInfo,
+    setRouteInfo,
+    routeLegs,
+    setRouteLegs,
+    legsAbortRef,
+    draggingId,
+    setDraggingId,
+    lockedIds,
+    setLockedIds,
+    lockHoverId,
+    setLockHoverId,
+    undoHover,
+    setUndoHover,
+    pdfHover,
+    setPdfHover,
+    icsHover,
+    setIcsHover,
+    hoveredAssignmentId,
+    setHoveredAssignmentId,
+    dropTargetKey,
+    _setDropTargetKey,
+    dropTargetRef,
+    setDropTargetKey,
+    dragOverDayId,
+    setDragOverDayId,
+    transportDetail,
+    setTransportDetail,
+    transportPosVersion,
+    setTransportPosVersion,
+    timeConfirm,
+    setTimeConfirm,
+    inputRef,
+    dragDataRef,
+    scrollContainerRef,
+    initedTransportIds,
+    lastAutoScrolledIdRef,
+    currency,
+    getDragData,
+    prevDayCount,
+    toggleDay,
+    getSpanLabel,
+    getDayOrder,
+    computeMultiDayMove,
+    getTransportForDay,
+    getActiveRentalsForDay,
+    getDayAssignments,
+    computeTransportPosition,
+    initTransportPositions,
+    getMergedItems,
+    mergedItemsMap,
+    wouldBreakChronology,
+    applyMergedOrder,
+    handleMergedDrop,
+    confirmTimeRemoval,
+    startEditTitle,
+    saveTitle,
+    handleCalculateRoute,
+    toggleLock,
+    handleOptimize,
+    handleDropOnDay,
+    handleDropOnRow,
+    totalCost,
+    anyGeoAssignment,
+    anyGeoPlace,
+  } = S
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative', fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif" }}>
       {/* Toolbar */}
-      <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-faint)', flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
-          <div style={{ position: 'relative', flexShrink: 0 }}>
-            <button
-              onClick={async () => {
-                const flatNotes = Object.entries(dayNotes).flatMap(([dayId, notes]) =>
-                  notes.map(n => ({ ...n, day_id: Number(dayId) }))
-                )
-                try {
-                  await downloadTripPDF({ trip, days, places, assignments, categories, dayNotes: flatNotes, reservations, t, locale })
-                } catch (e) {
-                  console.error('PDF error:', e)
-                  toast.error(t('dayplan.pdfError') + ': ' + (e?.message || String(e)))
-                }
-              }}
-              onMouseEnter={() => setPdfHover(true)}
-              onMouseLeave={() => setPdfHover(false)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 5,
-                padding: '5px 10px', borderRadius: 8, border: 'none',
-                background: 'var(--accent)', color: 'var(--accent-text)', fontSize: 11, fontWeight: 500,
-                cursor: 'pointer', fontFamily: 'inherit',
-              }}
-            >
-              <FileDown size={13} strokeWidth={2} />
-              {t('dayplan.pdf')}
-            </button>
-            {pdfHover && (
-              <div style={{
-                position: 'absolute', top: 'calc(100% + 6px)', right: 0,
-                whiteSpace: 'nowrap', pointerEvents: 'none', zIndex: 200,
-                background: 'var(--bg-card, white)', color: 'var(--text-primary, #111827)',
-                fontSize: 11, fontWeight: 500, padding: '5px 10px',
-                borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                border: '1px solid var(--border-faint, #e5e7eb)',
-              }}>
-                {t('dayplan.pdfTooltip')}
-              </div>
-            )}
-          </div>
-          <div style={{ position: 'relative', flexShrink: 0 }}>
-            <button
-              onClick={async () => {
-                try {
-                  const res = await fetch(`/api/trips/${tripId}/export.ics`, {
-                    credentials: 'include',
-                  })
-                  if (!res.ok) throw new Error()
-                  const blob = await res.blob()
-                  const url = URL.createObjectURL(blob)
-                  const a = document.createElement('a')
-                  a.href = url
-                  a.download = `${trip?.title || 'trip'}.ics`
-                  a.click()
-                  URL.revokeObjectURL(url)
-                } catch { toast.error(t('planner.icsExportFailed')) }
-              }}
-              onMouseEnter={() => setIcsHover(true)}
-              onMouseLeave={() => setIcsHover(false)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 5,
-                padding: '5px 10px', borderRadius: 8,
-                border: '1px solid var(--border-primary)', background: 'none',
-                color: 'var(--text-muted)', fontSize: 11, fontWeight: 500,
-                cursor: 'pointer', fontFamily: 'inherit',
-              }}
-            >
-              <FileDown size={13} strokeWidth={2} />
-              ICS
-            </button>
-            {icsHover && (
-              <div style={{
-                position: 'absolute', top: 'calc(100% + 6px)', right: 0,
-                whiteSpace: 'nowrap', pointerEvents: 'none', zIndex: 200,
-                background: 'var(--bg-card, white)', color: 'var(--text-primary, #111827)',
-                fontSize: 11, fontWeight: 500, padding: '5px 10px',
-                borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                border: '1px solid var(--border-faint, #e5e7eb)',
-              }}>
-                {t('dayplan.icsTooltip')}
-              </div>
-            )}
-          </div>
-          {(() => {
-            const allExpanded = days.length > 0 && days.every(d => expandedDays.has(d.id))
-            const label = allExpanded ? t('dayplan.collapseAll') : t('dayplan.expandAll')
-            return (
-              <Tooltip label={label} placement="bottom">
-                <button
-                  onClick={() => {
-                    const next = allExpanded ? new Set() : new Set(days.map(d => d.id))
-                    setExpandedDays(next)
-                    try { sessionStorage.setItem(`day-expanded-${tripId}`, JSON.stringify([...next])) } catch {}
-                  }}
-                  aria-label={label}
-                  aria-pressed={allExpanded}
-                  style={{
-                    position: 'relative', flexShrink: 0,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    width: 30, height: 30, borderRadius: 8,
-                    border: '1px solid var(--border-primary)', background: 'none',
-                    color: 'var(--text-primary)', cursor: 'pointer', fontFamily: 'inherit', padding: 0,
-                    transition: 'color 0.15s, border-color 0.15s, background 0.15s',
-                    overflow: 'hidden',
-                  }}
-                  onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg-hover)' }}
-                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
-                >
-                  <span style={{
-                    position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    transition: 'opacity 0.2s ease, transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)',
-                    opacity: allExpanded ? 0 : 1,
-                    transform: allExpanded ? 'translateY(-8px) scale(0.6)' : 'translateY(0) scale(1)',
-                  }}>
-                    <ChevronsUpDown size={14} strokeWidth={2} />
-                  </span>
-                  <span style={{
-                    position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    transition: 'opacity 0.2s ease, transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)',
-                    opacity: allExpanded ? 1 : 0,
-                    transform: allExpanded ? 'translateY(0) scale(1)' : 'translateY(8px) scale(0.6)',
-                  }}>
-                    <ChevronsDownUp size={14} strokeWidth={2} />
-                  </span>
-                </button>
-              </Tooltip>
-            )
-          })()}
-          {onUndo && (
-            <div style={{ position: 'relative', flexShrink: 0 }}>
-              <button
-                onClick={onUndo}
-                disabled={!canUndo}
-                aria-label={t('undo.button')}
-                onMouseEnter={() => setUndoHover(true)}
-                onMouseLeave={() => setUndoHover(false)}
-                style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  width: 30, height: 30, borderRadius: 8,
-                  border: '1px solid var(--border-primary)', background: 'none',
-                  color: canUndo ? 'var(--text-primary)' : 'var(--border-primary)',
-                  cursor: canUndo ? 'pointer' : 'default', fontFamily: 'inherit',
-                  transition: 'color 0.15s, border-color 0.15s',
-                }}
-              >
-                <Undo2 size={14} strokeWidth={2} />
-              </button>
-              {undoHover && (
-                <div style={{
-                  position: 'absolute', top: 'calc(100% + 6px)', right: 0,
-                  whiteSpace: 'nowrap', pointerEvents: 'none', zIndex: 200,
-                  background: 'var(--bg-card, white)', color: 'var(--text-primary, #111827)',
-                  fontSize: 11, fontWeight: 500, padding: '5px 10px',
-                  borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                  border: '1px solid var(--border-faint, #e5e7eb)',
-                }}>
-                  {canUndo && lastActionLabel ? t('undo.tooltip', { action: lastActionLabel }) : t('undo.button')}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
+      <DayPlanSidebarToolbar
+        tripId={tripId}
+        trip={trip}
+        days={days}
+        places={places}
+        categories={categories}
+        assignments={assignments}
+        reservations={reservations}
+        dayNotes={dayNotes}
+        t={t}
+        locale={locale}
+        toast={toast}
+        pdfHover={pdfHover}
+        setPdfHover={setPdfHover}
+        icsHover={icsHover}
+        setIcsHover={setIcsHover}
+        expandedDays={expandedDays}
+        setExpandedDays={setExpandedDays}
+        onUndo={onUndo}
+        canUndo={canUndo}
+        undoHover={undoHover}
+        setUndoHover={setUndoHover}
+        lastActionLabel={lastActionLabel}
+      />
 
       {/* Tagesliste */}
       <div className={`scroll-container${draggingId ? '' : ' trek-stagger'}`} style={{ flex: 1, overflowY: 'auto', minHeight: 0 }} ref={scrollContainerRef} onScroll={(e) => onScrollTopChange?.((e.currentTarget as HTMLElement).scrollTop)}>
@@ -1109,7 +1117,7 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
                 data-selected={isSelected}
                 onClick={() => { onSelectDay(day.id); if (onDayDetail) onDayDetail(day) }}
                 onDragOver={e => { e.preventDefault(); if (dragOverDayId !== day.id) setDragOverDayId(day.id) }}
-                onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOverDayId(null) }}
+                onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOverDayId(null) }}
                 onDrop={e => handleDropOnDay(e, day.id)}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 10,
@@ -1128,8 +1136,11 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
               >
                 {/* Tages-Badge: Nummer oben, darunter (falls vorhanden) das Wetter des Tages */}
                 {(() => {
-                  const wLat = loc?.place.lat ?? anyGeoPlace?.place?.lat ?? anyGeoPlace?.lat
-                  const wLng = loc?.place.lng ?? anyGeoPlace?.place?.lng ?? anyGeoPlace?.lng
+                  // anyGeoPlace is an assignment (has .place) or a bare place — read coords from either.
+                  const geoLat = anyGeoPlace ? ('place' in anyGeoPlace ? anyGeoPlace.place?.lat : anyGeoPlace.lat) : undefined
+                  const geoLng = anyGeoPlace ? ('place' in anyGeoPlace ? anyGeoPlace.place?.lng : anyGeoPlace.lng) : undefined
+                  const wLat = loc?.place?.lat ?? geoLat
+                  const wLng = loc?.place?.lng ?? geoLng
                   const hasWeather = !!(day.date && anyGeoPlace && wLat != null && wLng != null)
                   return (
                     <div style={{
@@ -1212,9 +1223,9 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
                           const isCheckOut = acc.end_day_id === day.id
                           const iconColor = isCheckOut && !isCheckIn ? '#ef4444' : isCheckIn ? '#22c55e' : 'var(--text-faint)'
                           return (
-                            <span key={acc.id} onClick={e => { e.stopPropagation(); if ((acc as any).place_id) onPlaceClick((acc as any).place_id) }} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 1, minWidth: 0, cursor: (acc as any).place_id ? 'pointer' : 'default', background: 'var(--bg-hover)', borderRadius: 7, padding: '2px 7px 2px 6px' }}>
+                            <span key={acc.id} onClick={e => { e.stopPropagation(); if ((acc as any).place_id) onPlaceClick((acc as any).place_id) }} className="bg-surface-hover" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 1, minWidth: 0, cursor: (acc as any).place_id ? 'pointer' : 'default', borderRadius: 7, padding: '2px 7px 2px 6px' }}>
                               <Hotel size={11} strokeWidth={1.8} style={{ color: iconColor, flexShrink: 0 }} />
-                              <span style={{ fontSize: 10.5, color: 'var(--text-muted)', fontWeight: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{(acc as any).place_name || (acc as any).reservation_title}</span>
+                              <span className="text-content-muted" style={{ fontSize: 10.5, fontWeight: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{(acc as any).place_name || (acc as any).reservation_title}</span>
                             </span>
                           )
                         })
@@ -1224,9 +1235,9 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
                         const activeRentals = getActiveRentalsForDay(day.id)
                         if (activeRentals.length === 0) return null
                         return activeRentals.map(r => (
-                          <span key={`rental-${r.id}`} onClick={e => { e.stopPropagation(); setTransportDetail(r) }} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 1, minWidth: 0, cursor: 'pointer', background: 'var(--bg-hover)', borderRadius: 7, padding: '2px 7px 2px 6px' }}>
-                            <Car size={11} strokeWidth={1.8} style={{ color: 'var(--text-faint)', flexShrink: 0 }} />
-                            <span style={{ fontSize: 10.5, color: 'var(--text-muted)', fontWeight: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.title}</span>
+                          <span key={`rental-${r.id}`} onClick={e => { e.stopPropagation(); setTransportDetail(r) }} className="bg-surface-hover" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 1, minWidth: 0, cursor: 'pointer', borderRadius: 7, padding: '2px 7px 2px 6px' }}>
+                            <Car size={11} strokeWidth={1.8} className="text-content-faint" style={{ flexShrink: 0 }} />
+                            <span className="text-content-muted" style={{ fontSize: 10.5, fontWeight: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.title}</span>
                           </span>
                         ))
                       })()}
@@ -1235,7 +1246,7 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
                   )}
                   {cost && (
                     <div style={{ marginTop: 2 }}>
-                      <span style={{ fontSize: 11, color: '#059669' }}>{cost}</span>
+                      <span className="text-[#059669]" style={{ fontSize: 11 }}>{cost}</span>
                     </div>
                   )}
                 </div>
@@ -1264,7 +1275,7 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
                     )
                   })()
                 ) : (
-                  <button onClick={e => toggleDay(day.id, e)} style={{ alignSelf: 'flex-start', flexShrink: 0, background: 'none', border: 'none', padding: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', color: 'var(--text-faint)' }}>
+                  <button onClick={e => toggleDay(day.id, e)} className="text-content-faint" style={{ alignSelf: 'flex-start', flexShrink: 0, background: 'none', border: 'none', padding: 6, cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
                     {isExpanded ? <ChevronDown size={16} strokeWidth={1.8} /> : <ChevronRight size={16} strokeWidth={1.8} />}
                   </button>
                 )}
@@ -1336,12 +1347,12 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
                     <div
                       onDragOver={e => { e.preventDefault(); if (dragOverDayId !== day.id) setDragOverDayId(day.id) }}
                       onDrop={e => handleDropOnDay(e, day.id)}
+                      className={dragOverDayId === day.id ? 'bg-[rgba(17,24,39,0.05)]' : 'bg-transparent'}
                       style={{ padding: '16px', textAlign: 'center', borderRadius: 8,
-                        background: dragOverDayId === day.id ? 'rgba(17,24,39,0.05)' : 'transparent',
                         border: dragOverDayId === day.id ? '2px dashed rgba(17,24,39,0.2)' : '2px dashed transparent',
                       }}
                     >
-                      <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>{t('dayplan.emptyDay')}</span>
+                      <span className="text-content-faint" style={{ fontSize: 12 }}>{t('dayplan.emptyDay')}</span>
                     </div>
                   ) : (
                     merged.map((item, idx) => {
@@ -1528,7 +1539,7 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
                               <div style={{ display: 'flex', alignItems: 'center', gap: 4, overflow: 'hidden' }}>
                                 {cat && (() => {
                                   const CatIcon = getCategoryIcon(cat.icon)
-                                  return <CatIcon size={10} strokeWidth={2} color={cat.color || 'var(--text-muted)'} title={cat.name} style={{ flexShrink: 0 }} />
+                                  return <span title={cat.name} style={{ display: 'inline-flex', flexShrink: 0 }}><CatIcon size={10} strokeWidth={2} color={cat.color || 'var(--text-muted)'} /></span>
                                 })()}
                                 <span style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.2 }}>
                                   {place.name}
@@ -1553,9 +1564,7 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
                                 const active = hasEndpoints ? visibleConnectionIds.includes(res.id) : false
                                 return (
                                   <div style={{ marginTop: 3, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 3, padding: '1px 6px', borderRadius: 5, fontSize: 9, fontWeight: 600,
-                                      background: confirmed ? 'rgba(22,163,74,0.1)' : 'rgba(217,119,6,0.1)',
-                                      color: confirmed ? '#16a34a' : '#d97706',
+                                    <div className={confirmed ? 'bg-[rgba(22,163,74,0.1)] text-[#16a34a]' : 'bg-[rgba(217,119,6,0.1)] text-[#d97706]'} style={{ display: 'inline-flex', alignItems: 'center', gap: 3, padding: '1px 6px', borderRadius: 5, fontSize: 9, fontWeight: 600,
                                     }}>
                                       {(() => { const RI = RES_ICONS[res.type] || Ticket; return <RI size={8} /> })()}
                                       <span className="hidden sm:inline">{confirmed ? t('planner.resConfirmed') : t('planner.resPending')}</span>
@@ -1584,13 +1593,12 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
                                         type="button"
                                         onClick={e => { e.stopPropagation(); onToggleConnection!(res.id) }}
                                         title={t(active ? 'map.hideConnections' : 'map.showConnections')}
+                                        className={active ? 'bg-[#3b82f6] text-[#fff]' : 'bg-transparent text-content-faint'}
                                         style={{
                                           flexShrink: 0, appearance: 'none',
                                           width: 20, height: 20, borderRadius: 4,
                                           display: 'grid', placeItems: 'center', cursor: 'pointer',
                                           border: 'none',
-                                          background: active ? '#3b82f6' : 'transparent',
-                                          color: active ? '#fff' : 'var(--text-faint)',
                                           transition: 'color 120ms cubic-bezier(0.23,1,0.32,1), background 120ms cubic-bezier(0.23,1,0.32,1)',
                                         }}
                                         onMouseEnter={e => { if (!active) e.currentTarget.style.color = 'var(--text-primary)' }}
@@ -1608,12 +1616,12 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
                                           type="button"
                                           onClick={e => { e.stopPropagation(); handler(res) }}
                                           title={t('common.edit')}
+                                          className="bg-transparent text-content-faint"
                                           style={{
                                             flexShrink: 0, appearance: 'none',
                                             width: 20, height: 20, borderRadius: 4,
                                             display: 'grid', placeItems: 'center', cursor: 'pointer',
-                                            border: 'none', background: 'transparent',
-                                            color: 'var(--text-faint)',
+                                            border: 'none',
                                             transition: 'color 120ms cubic-bezier(0.23,1,0.32,1), background 120ms cubic-bezier(0.23,1,0.32,1)',
                                           }}
                                           onMouseEnter={e => { e.currentTarget.style.color = 'var(--text-primary)' }}
@@ -1629,9 +1637,9 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
                               {assignment.participants?.length > 0 && (
                                 <div style={{ marginTop: 3, display: 'flex', alignItems: 'center', gap: -4 }}>
                                   {assignment.participants.slice(0, 5).map((p, pi) => (
-                                    <div key={p.user_id} style={{
-                                      width: 16, height: 16, borderRadius: '50%', background: 'var(--bg-tertiary)', border: '1.5px solid var(--bg-card)',
-                                      display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 7, fontWeight: 700, color: 'var(--text-muted)',
+                                    <div key={p.user_id} className="bg-surface-tertiary text-content-muted" style={{
+                                      width: 16, height: 16, borderRadius: '50%', border: '1.5px solid var(--bg-card)',
+                                      display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 7, fontWeight: 700,
                                       marginLeft: pi > 0 ? -4 : 0, flexShrink: 0,
                                       overflow: 'hidden',
                                     }}>
@@ -1639,16 +1647,16 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
                                     </div>
                                   ))}
                                   {assignment.participants.length > 5 && (
-                                    <span style={{ fontSize: 8, color: 'var(--text-faint)', marginLeft: 2 }}>+{assignment.participants.length - 5}</span>
+                                    <span className="text-content-faint" style={{ fontSize: 8, marginLeft: 2 }}>+{assignment.participants.length - 5}</span>
                                   )}
                                 </div>
                               )}
                             </div>
                             {canEditDays && <div className="reorder-buttons" style={{ flexShrink: 0, display: 'flex', gap: 1, transition: 'opacity 0.15s' }}>
-                              <button onClick={moveUp} disabled={idx === 0} style={{ background: 'none', border: 'none', padding: '1px 2px', cursor: idx === 0 ? 'default' : 'pointer', color: idx === 0 ? 'var(--border-primary)' : 'var(--text-faint)', display: 'flex', lineHeight: 1 }}>
+                              <button onClick={moveUp} disabled={idx === 0} className={idx === 0 ? 'text-[var(--border-primary)]' : 'text-content-faint'} style={{ background: 'none', border: 'none', padding: '1px 2px', cursor: idx === 0 ? 'default' : 'pointer', display: 'flex', lineHeight: 1 }}>
                                 <ChevronUp size={12} strokeWidth={2} />
                               </button>
-                              <button onClick={moveDown} disabled={idx === merged.length - 1} style={{ background: 'none', border: 'none', padding: '1px 2px', cursor: idx === merged.length - 1 ? 'default' : 'pointer', color: idx === merged.length - 1 ? 'var(--border-primary)' : 'var(--text-faint)', display: 'flex', lineHeight: 1 }}>
+                              <button onClick={moveDown} disabled={idx === merged.length - 1} className={idx === merged.length - 1 ? 'text-[var(--border-primary)]' : 'text-content-faint'} style={{ background: 'none', border: 'none', padding: '1px 2px', cursor: idx === merged.length - 1 ? 'default' : 'pointer', display: 'flex', lineHeight: 1 }}>
                                 <ChevronDown size={12} strokeWidth={2} />
                               </button>
                             </div>}
@@ -1941,12 +1949,12 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
                             )}
                           </div>
                           {canEditDays && <div className="note-edit-buttons" style={{ display: 'flex', gap: 1, flexShrink: 0, opacity: 0, transition: 'opacity 0.15s' }}>
-                            <button onClick={e => openEditNote(day.id, note, e)} style={{ background: 'none', border: 'none', padding: 2, cursor: 'pointer', color: 'var(--text-faint)', display: 'flex' }}><Pencil size={10} /></button>
-                            <button onClick={e => deleteNote(day.id, note.id, e)} style={{ background: 'none', border: 'none', padding: 2, cursor: 'pointer', color: 'var(--text-faint)', display: 'flex' }}><Trash2 size={10} /></button>
+                            <button onClick={e => openEditNote(day.id, note, e)} className="text-content-faint" style={{ background: 'none', border: 'none', padding: 2, cursor: 'pointer', display: 'flex' }}><Pencil size={10} /></button>
+                            <button onClick={e => deleteNote(day.id, note.id, e)} className="text-content-faint" style={{ background: 'none', border: 'none', padding: 2, cursor: 'pointer', display: 'flex' }}><Trash2 size={10} /></button>
                           </div>}
                           {canEditDays && <div className="reorder-buttons" style={{ flexShrink: 0, display: 'flex', gap: 1, transition: 'opacity 0.15s' }}>
-                            <button onClick={e => { e.stopPropagation(); moveNote(day.id, note.id, 'up') }} disabled={noteIdx === 0} style={{ background: 'none', border: 'none', padding: '1px 2px', cursor: noteIdx === 0 ? 'default' : 'pointer', color: noteIdx === 0 ? 'var(--border-primary)' : 'var(--text-faint)', display: 'flex', lineHeight: 1 }}><ChevronUp size={12} strokeWidth={2} /></button>
-                            <button onClick={e => { e.stopPropagation(); moveNote(day.id, note.id, 'down') }} disabled={noteIdx === merged.length - 1} style={{ background: 'none', border: 'none', padding: '1px 2px', cursor: noteIdx === merged.length - 1 ? 'default' : 'pointer', color: noteIdx === merged.length - 1 ? 'var(--border-primary)' : 'var(--text-faint)', display: 'flex', lineHeight: 1 }}><ChevronDown size={12} strokeWidth={2} /></button>
+                            <button onClick={e => { e.stopPropagation(); moveNote(day.id, note.id, 'up') }} disabled={noteIdx === 0} className={noteIdx === 0 ? 'text-[var(--border-primary)]' : 'text-content-faint'} style={{ background: 'none', border: 'none', padding: '1px 2px', cursor: noteIdx === 0 ? 'default' : 'pointer', display: 'flex', lineHeight: 1 }}><ChevronUp size={12} strokeWidth={2} /></button>
+                            <button onClick={e => { e.stopPropagation(); moveNote(day.id, note.id, 'down') }} disabled={noteIdx === merged.length - 1} className={noteIdx === merged.length - 1 ? 'text-[var(--border-primary)]' : 'text-content-faint'} style={{ background: 'none', border: 'none', padding: '1px 2px', cursor: noteIdx === merged.length - 1 ? 'default' : 'pointer', display: 'flex', lineHeight: 1 }}><ChevronDown size={12} strokeWidth={2} /></button>
                           </div>}
                         </div>
                         </React.Fragment>
@@ -2002,22 +2010,21 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
                       <div style={{ display: 'flex', gap: 6, alignItems: 'stretch' }}>
                         <button
                           onClick={() => onToggleRoute?.()}
+                          className={routeShown ? 'bg-accent text-accent-text' : 'bg-transparent text-content-secondary'}
                           style={{
                             flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
                             padding: '6px 0', fontSize: 11, fontWeight: 600, borderRadius: 8,
                             border: routeShown ? 'none' : '1px solid var(--border-faint)',
-                            background: routeShown ? 'var(--accent)' : 'transparent',
-                            color: routeShown ? 'var(--accent-text)' : 'var(--text-secondary)',
                             cursor: 'pointer', fontFamily: 'inherit',
                           }}
                         >
                           <RouteIcon size={12} strokeWidth={2} />
                           {t('dayplan.route')}
                         </button>
-                        <button onClick={handleOptimize} style={{
+                        <button onClick={handleOptimize} className="bg-surface-hover text-content-secondary" style={{
                           flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
                           padding: '6px 0', fontSize: 11, fontWeight: 500, borderRadius: 8, border: 'none',
-                          background: 'var(--bg-hover)', color: 'var(--text-secondary)', cursor: 'pointer', fontFamily: 'inherit',
+                          cursor: 'pointer', fontFamily: 'inherit',
                         }}>
                           <RotateCcw size={12} strokeWidth={2} />
                           {t('dayplan.optimize')}
@@ -2031,11 +2038,10 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
                                 key={p}
                                 onClick={() => onSetRouteProfile?.(p)}
                                 aria-label={p === 'driving' ? 'Driving' : 'Walking'}
+                                className={active ? 'bg-accent text-accent-text' : 'bg-transparent text-content-secondary'}
                                 style={{
                                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                                   padding: '6px 10px', border: 'none', cursor: 'pointer',
-                                  background: active ? 'var(--accent)' : 'transparent',
-                                  color: active ? 'var(--accent-text)' : 'var(--text-secondary)',
                                 }}
                               >
                                 <ModeIcon size={13} strokeWidth={2} />
@@ -2045,9 +2051,9 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
                         </div>
                       </div>
                       {routeInfo && (
-                        <div style={{ display: 'flex', justifyContent: 'center', gap: 12, fontSize: 12, color: 'var(--text-secondary)', background: 'var(--bg-hover)', borderRadius: 8, padding: '5px 10px' }}>
+                        <div className="text-content-secondary bg-surface-hover" style={{ display: 'flex', justifyContent: 'center', gap: 12, fontSize: 12, borderRadius: 8, padding: '5px 10px' }}>
                           <span>{routeInfo.distance}</span>
-                          <span style={{ color: 'var(--text-faint)' }}>·</span>
+                          <span className="text-content-faint">·</span>
                           <span>{routeInfo.duration}</span>
                         </div>
                       )}
@@ -2070,267 +2076,35 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar({
       </div>
 
       {/* Notiz-Popup-Modal — über Portal gerendert, um den backdropFilter-Stapelkontext zu umgehen */}
-      {Object.entries(noteUi).map(([dayId, ui]) => ui && ReactDOM.createPortal(
-        <div key={dayId} style={{
-          position: 'fixed', inset: 0, zIndex: 10000,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(3px)',
-        }} onClick={() => cancelNote(Number(dayId))}>
-          <div style={{
-            width: 340, background: 'var(--bg-card)', borderRadius: 16,
-            boxShadow: '0 16px 48px rgba(0,0,0,0.22)', padding: '22px 22px 18px',
-            display: 'flex', flexDirection: 'column', gap: 12,
-          }} onClick={e => e.stopPropagation()}>
-            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>
-              {ui.mode === 'add' ? t('dayplan.noteAdd') : t('dayplan.noteEdit')}
-            </div>
-            {/* Icon-Auswahl */}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-              {NOTE_ICONS.map(({ id, Icon }) => (
-                <button key={id} onClick={() => setNoteUi(prev => ({ ...prev, [dayId]: { ...prev[dayId], icon: id } }))}
-                  title={id}
-                  style={{ width: 45, height: 45, borderRadius: 8, border: ui.icon === id ? '2px solid var(--text-primary)' : '2px solid var(--border-faint)', background: ui.icon === id ? 'var(--bg-hover)' : 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>
-                  <Icon size={18} strokeWidth={1.8} color={ui.icon === id ? 'var(--text-primary)' : 'var(--text-muted)'} />
-                </button>
-              ))}
-            </div>
-            <input
-              ref={noteInputRef}
-              type="text"
-              value={ui.text}
-              onChange={e => setNoteUi(prev => ({ ...prev, [dayId]: { ...prev[dayId], text: e.target.value } }))}
-              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); saveNote(Number(dayId)) } if (e.key === 'Escape') cancelNote(Number(dayId)) }}
-              placeholder={t('dayplan.noteTitle') + ' *'}
-              required
-              style={{ fontSize: 13, fontWeight: 500, border: `1px solid ${!ui.text?.trim() ? 'var(--border-primary)' : 'var(--border-primary)'}`, borderRadius: 8, padding: '8px 10px', fontFamily: 'inherit', outline: 'none', width: '100%', boxSizing: 'border-box', color: 'var(--text-primary)' }}
-            />
-            <textarea
-              value={ui.time}
-              maxLength={150}
-              rows={3}
-              onChange={e => setNoteUi(prev => ({ ...prev, [dayId]: { ...prev[dayId], time: e.target.value } }))}
-              onKeyDown={e => { if (e.key === 'Escape') cancelNote(Number(dayId)) }}
-              placeholder={t('dayplan.noteSubtitle')}
-              style={{ fontSize: 12, border: '1px solid var(--border-primary)', borderRadius: 8, padding: '7px 10px', fontFamily: 'inherit', outline: 'none', width: '100%', boxSizing: 'border-box', color: 'var(--text-primary)', resize: 'none', lineHeight: 1.4 }}
-            />
-            <div style={{ textAlign: 'right', fontSize: 11, color: (ui.time?.length || 0) >= 140 ? '#d97706' : 'var(--text-faint)', marginTop: -2 }}>{ui.time?.length || 0}/150</div>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button onClick={() => cancelNote(Number(dayId))} style={{ fontSize: 12, background: 'none', border: '1px solid var(--border-primary)', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', color: 'var(--text-muted)', fontFamily: 'inherit' }}>{t('common.cancel')}</button>
-              <button onClick={() => saveNote(Number(dayId))} disabled={!ui.text?.trim()} style={{ fontSize: 12, background: !ui.text?.trim() ? 'var(--border-primary)' : 'var(--accent)', color: !ui.text?.trim() ? 'var(--text-faint)' : 'var(--accent-text)', border: 'none', borderRadius: 8, padding: '6px 16px', cursor: !ui.text?.trim() ? 'not-allowed' : 'pointer', fontWeight: 600, fontFamily: 'inherit', transition: 'background 0.15s, color 0.15s' }}>
-                {ui.mode === 'add' ? t('common.add') : t('common.save')}
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.body
-      ))}
+      <DayPlanSidebarNoteModal
+        noteUi={noteUi}
+        setNoteUi={setNoteUi}
+        noteInputRef={noteInputRef}
+        cancelNote={cancelNote}
+        saveNote={saveNote}
+        t={t}
+      />
 
       {/* Confirm: remove time when reordering a timed place */}
-      {timeConfirm && ReactDOM.createPortal(
-        <div style={{
-          position: 'fixed', inset: 0, zIndex: 1000,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(3px)',
-        }} onClick={() => setTimeConfirm(null)}>
-          <div style={{
-            width: 340, background: 'var(--bg-card)', borderRadius: 16,
-            boxShadow: '0 16px 48px rgba(0,0,0,0.22)', padding: '22px 22px 18px',
-            display: 'flex', flexDirection: 'column', gap: 12,
-          }} onClick={e => e.stopPropagation()}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div style={{
-                width: 36, height: 36, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                borderRadius: '50%', background: 'rgba(239,68,68,0.12)',
-              }}>
-                <Clock size={18} strokeWidth={1.8} color="#ef4444" />
-              </div>
-              <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>
-                {t('dayplan.confirmRemoveTimeTitle')}
-              </div>
-            </div>
-            <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-              {t('dayplan.confirmRemoveTimeBody', { time: timeConfirm.time })}
-            </div>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
-              <button onClick={() => setTimeConfirm(null)} style={{
-                fontSize: 12, background: 'none', border: '1px solid var(--border-primary)',
-                borderRadius: 8, padding: '6px 14px', cursor: 'pointer', color: 'var(--text-muted)', fontFamily: 'inherit',
-              }}>{t('common.cancel')}</button>
-              <button onClick={confirmTimeRemoval} style={{
-                fontSize: 12, background: '#ef4444', color: 'white',
-                border: 'none', borderRadius: 8, padding: '6px 16px', cursor: 'pointer', fontWeight: 600, fontFamily: 'inherit',
-              }}>{t('common.confirm')}</button>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
+      <DayPlanSidebarTimeConfirmModal
+        timeConfirm={timeConfirm}
+        setTimeConfirm={setTimeConfirm}
+        confirmTimeRemoval={confirmTimeRemoval}
+        t={t}
+      />
 
       {/* Transport-Detail-Modal */}
-      {transportDetail && ReactDOM.createPortal(
-        <div style={{
-          position: 'fixed', inset: 0, zIndex: 1000,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(3px)',
-        }} onClick={() => setTransportDetail(null)}>
-          <div style={{
-            width: 380, maxHeight: '80vh', overflowY: 'auto',
-            background: 'var(--bg-card)', borderRadius: 16,
-            boxShadow: '0 16px 48px rgba(0,0,0,0.22)', padding: '22px 22px 18px',
-            display: 'flex', flexDirection: 'column', gap: 14,
-          }} onClick={e => e.stopPropagation()}>
-            {(() => {
-              const res = transportDetail
-              const TransportIcon = RES_ICONS[res.type] || Ticket
-              const TRANSPORT_COLORS = { flight: '#3b82f6', train: '#06b6d4', bus: '#f59e0b', car: '#6b7280', cruise: '#0ea5e9' }
-              const color = TRANSPORT_COLORS[res.type] || 'var(--text-muted)'
-              const meta = typeof res.metadata === 'string' ? JSON.parse(res.metadata || '{}') : (res.metadata || {})
-
-              const detailFields = []
-              if (res.type === 'flight') {
-                if (meta.airline) detailFields.push({ label: t('reservations.meta.airline'), value: meta.airline })
-                if (meta.flight_number) detailFields.push({ label: t('reservations.meta.flightNumber'), value: meta.flight_number })
-                if (meta.departure_airport) detailFields.push({ label: t('reservations.meta.from'), value: meta.departure_airport })
-                if (meta.arrival_airport) detailFields.push({ label: t('reservations.meta.to'), value: meta.arrival_airport })
-                if (meta.seat) detailFields.push({ label: t('reservations.meta.seat'), value: meta.seat })
-              } else if (res.type === 'train') {
-                if (meta.train_number) detailFields.push({ label: t('reservations.meta.trainNumber'), value: meta.train_number })
-                if (meta.platform) detailFields.push({ label: t('reservations.meta.platform'), value: meta.platform })
-                if (meta.seat) detailFields.push({ label: t('reservations.meta.seat'), value: meta.seat })
-              }
-              if (res.confirmation_number) detailFields.push({ label: t('reservations.confirmationCode'), value: res.confirmation_number, sensitive: true })
-              if (res.location) detailFields.push({ label: t('reservations.locationAddress'), value: res.location })
-
-              return (
-                <>
-                  {/* Header */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div style={{
-                      width: 36, height: 36, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      borderRadius: '50%', background: `${color}18`,
-                    }}>
-                      <TransportIcon size={18} strokeWidth={1.8} color={color} />
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>{res.title}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 2 }}>
-                        {(() => {
-                          const { date, time } = splitReservationDateTime(res.reservation_time)
-                          const { time: endTime } = splitReservationDateTime(res.reservation_end_time)
-                          const dateStr = date
-                            ? new Date(date + 'T00:00:00Z').toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })
-                            : ''
-                          const timeStr = time ? formatTime(time, locale, timeFormat) : ''
-                          const endStr = endTime ? formatTime(endTime, locale, timeFormat) : ''
-                          const parts: string[] = []
-                          if (dateStr) parts.push(dateStr)
-                          if (timeStr) parts.push(timeStr + (endStr ? ` – ${endStr}` : ''))
-                          return parts.join(', ')
-                        })()}
-                      </div>
-                    </div>
-                    <div style={{
-                      padding: '3px 8px', borderRadius: 6, fontSize: 10, fontWeight: 600,
-                      background: res.status === 'confirmed' ? 'rgba(22,163,74,0.1)' : 'rgba(217,119,6,0.1)',
-                      color: res.status === 'confirmed' ? '#16a34a' : '#d97706',
-                    }}>
-                      {(res.status === 'confirmed' ? t('planner.resConfirmed') : t('planner.resPending')).replace(/\s*·\s*$/, '')}
-                    </div>
-                  </div>
-
-                  {/* Detail-Felder */}
-                  {detailFields.length > 0 && (
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                      {detailFields.map((f, i) => {
-                        const shouldBlur = f.sensitive && useSettingsStore.getState().settings.blur_booking_codes
-                        return (
-                          <div key={i} style={{ padding: '8px 10px', background: 'var(--bg-tertiary)', borderRadius: 8 }}>
-                            <div style={{ fontSize: 9, fontWeight: 600, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 3 }}>{f.label}</div>
-                            <div
-                              onMouseEnter={e => { if (shouldBlur) e.currentTarget.style.filter = 'none' }}
-                              onMouseLeave={e => { if (shouldBlur) e.currentTarget.style.filter = 'blur(5px)' }}
-                              onClick={e => { if (shouldBlur) { const el = e.currentTarget; el.style.filter = el.style.filter === 'none' ? 'blur(5px)' : 'none' } }}
-                              style={{
-                                fontSize: 12, fontWeight: 500, color: 'var(--text-primary)', wordBreak: 'break-word',
-                                filter: shouldBlur ? 'blur(5px)' : 'none', transition: 'filter 0.2s',
-                                cursor: shouldBlur ? 'pointer' : 'default',
-                                userSelect: shouldBlur ? 'none' : 'auto',
-                              }}
-                            >{f.value}</div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
-
-                  {/* Notizen */}
-                  {res.notes && (
-                    <div style={{ padding: '8px 10px', background: 'var(--bg-tertiary)', borderRadius: 8 }}>
-                      <div style={{ fontSize: 9, fontWeight: 600, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 3 }}>{t('reservations.notes')}</div>
-                      <div className="collab-note-md" style={{ fontSize: 12, color: 'var(--text-primary)', wordBreak: 'break-word', overflowWrap: 'anywhere' }}><Markdown remarkPlugins={[remarkGfm, remarkBreaks]}>{res.notes}</Markdown></div>
-                    </div>
-                  )}
-
-                  {/* Dateien */}
-                  {(() => {
-                    const resFiles = (useTripStore.getState().files || []).filter(f =>
-                      !f.deleted_at && (
-                        f.reservation_id === res.id ||
-                        (f.linked_reservation_ids && f.linked_reservation_ids.includes(res.id))
-                      )
-                    )
-                    if (resFiles.length === 0) return null
-                    return (
-                      <div>
-                        <div style={{ fontSize: 9, fontWeight: 600, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 6 }}>{t('files.title')}</div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                          {resFiles.map(f => (
-                            <div key={f.id}
-                              onClick={() => { setTransportDetail(null); onNavigateToFiles?.() }}
-                              style={{
-                                display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px',
-                                background: 'var(--bg-tertiary)', borderRadius: 8, cursor: 'pointer',
-                                transition: 'background 0.1s',
-                              }}
-                              onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-hover)'}
-                              onMouseLeave={e => e.currentTarget.style.background = 'var(--bg-tertiary)'}
-                            >
-                              <FileText size={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-                              <span style={{ flex: 1, fontSize: 12, fontWeight: 500, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {f.original_name}
-                              </span>
-                              <ExternalLink size={11} style={{ color: 'var(--text-faint)', flexShrink: 0 }} />
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )
-                  })()}
-
-                  {/* Schließen */}
-                  <div style={{ textAlign: 'right' }}>
-                    <button onClick={() => setTransportDetail(null)} style={{
-                      fontSize: 12, background: 'var(--accent)', color: 'var(--accent-text)',
-                      border: 'none', borderRadius: 8, padding: '6px 16px', cursor: 'pointer', fontWeight: 600, fontFamily: 'inherit',
-                    }}>
-                      {t('common.close')}
-                    </button>
-                  </div>
-                </>
-              )
-            })()}
-          </div>
-        </div>,
-        document.body
-      )}
+      <DayPlanSidebarTransportDetailModal
+        transportDetail={transportDetail}
+        setTransportDetail={setTransportDetail}
+        onNavigateToFiles={onNavigateToFiles}
+        t={t}
+        locale={locale}
+        timeFormat={timeFormat}
+      />
 
       {/* Budget-Fußzeile */}
-      {totalCost > 0 && (
-        <div style={{ flexShrink: 0, padding: '10px 16px', borderTop: '1px solid var(--border-faint)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>{t('dayplan.totalCost')}</span>
-          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{totalCost.toFixed(currencyDecimals(currency))} {currency}</span>
-        </div>
-      )}
+      <DayPlanSidebarFooter totalCost={totalCost} currency={currency} t={t} />
       <ContextMenu menu={ctxMenu.menu} onClose={ctxMenu.close} />
     </div>
   )

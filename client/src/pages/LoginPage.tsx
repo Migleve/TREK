@@ -11,7 +11,7 @@ export default function LoginPage(): React.ReactElement {
     navigate,
     mode, setMode,
     username, setUsername, email, setEmail, password, setPassword, rememberMe, setRememberMe, showPassword, setShowPassword,
-    isLoading, error, setError, appConfig, inviteToken,
+    isLoading, error, setError, insecureCookie, appConfig, inviteToken,
     langDropdownOpen, setLangDropdownOpen, setLanguageLocal,
     showTakeoff, mfaStep, setMfaStep, mfaToken, setMfaToken, mfaCode, setMfaCode,
     passwordChangeStep, newPassword, setNewPassword, confirmPassword, setConfirmPassword,
@@ -444,6 +444,17 @@ export default function LoginPage(): React.ReactElement {
               {error && (
                 <div style={{ padding: '10px 14px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 10, fontSize: 'calc(13px * var(--fs-scale-body, 1))', color: '#dc2626' }}>
                   {error}
+                </div>
+              )}
+
+              {insecureCookie && (
+                <div style={{ padding: '12px 14px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, fontSize: 'calc(13px * var(--fs-scale-body, 1))', color: '#92400e' }}>
+                  <div style={{ fontWeight: 700, marginBottom: 4 }}>{t('login.insecureCookie.title')}</div>
+                  <div style={{ lineHeight: 1.55 }}>{t('login.insecureCookie.body')}</div>
+                  <a href="https://github.com/mauriceboe/TREK/wiki/Troubleshooting" target="_blank" rel="noopener noreferrer"
+                    style={{ display: 'inline-block', marginTop: 6, fontWeight: 600, color: '#b45309', textDecoration: 'underline' }}>
+                    {t('login.insecureCookie.link')} ↗
+                  </a>
                 </div>
               )}
 

@@ -12,7 +12,7 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -22,5 +22,14 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git remote add upstream https://github.com/mauriceboe/TREK.git
           git fetch upstream main
-          git merge --no-edit upstream/main
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "Already up to date with upstream/main"
+            exit 0
+          fi
+
+          # GITHUB_TOKEN cannot add or modify workflow files. Keep this fork's
+          # workflows while syncing the rest of the upstream repository.
+          git merge --no-commit --no-ff upstream/main
+          git restore --source=HEAD --staged --worktree .github/workflows
+          git commit --no-edit
           git push origin main

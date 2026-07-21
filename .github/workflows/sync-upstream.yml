@@ -39,7 +39,7 @@ jobs:
           # GITHUB_TOKEN cannot add or modify workflow files, so always keep
           # THIS fork's own .github/workflows and discard any upstream change
           # or conflict under that path.
-          git rm -r --force --ignore-unmatch .github/workflows > /dev/null 2>&1 || true
+          git rm -r --cached --ignore-unmatch .github/workflows > /dev/null 2>&1 || true
           git checkout HEAD -- .github/workflows 2> /dev/null || true
           git add .github/workflows 2> /dev/null || true
 

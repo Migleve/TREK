@@ -16,20 +16,50 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Merge upstream main
         run: |
+          set -euo pipefail
+
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git remote add upstream https://github.com/mauriceboe/TREK.git
           git fetch upstream main
+
           if git merge-base --is-ancestor upstream/main HEAD; then
             echo "Already up to date with upstream/main"
             exit 0
           fi
 
-          # GITHUB_TOKEN cannot add or modify workflow files. Keep this fork's
-          # workflows while syncing the rest of the upstream repository.
-          git merge --no-commit --no-ff upstream/main
-          git restore --source=HEAD --staged --worktree .github/workflows
+          # Start the merge but do NOT let a conflict abort the step here:
+          # we resolve the workflow-file conflicts ourselves below.
+          # (`|| true` prevents `set -e` from killing the job on conflicts.)
+          git merge --no-commit --no-ff upstream/main || true
+
+          # GITHUB_TOKEN cannot add or modify workflow files, so always keep
+          # THIS fork's own .github/workflows and discard any upstream change
+          # or conflict under that path.
+          git rm -r --cached --ignore-unmatch .github/workflows > /dev/null 2>&1 || true
+          git checkout HEAD -- .github/workflows 2> /dev/null || true
+          git add .github/workflows 2> /dev/null || true
+
+          # If real conflicts remain outside the workflows we just reset,
+          # stop and let a human resolve them instead of pushing garbage.
+          if git diff --name-only --diff-filter=U | grep -q .; then
+            echo "Unresolved merge conflicts remain (resolve manually):"
+            git diff --name-only --diff-filter=U
+            git merge --abort || true
+            exit 1
+          fi
+
+          # Nothing left to merge (upstream only touched workflow files that
+          # we reverted): abort cleanly, nothing to push.
+          if ! git rev-parse -q --verify MERGE_HEAD > /dev/null; then
+            echo "Merge already resolved to no changes; nothing to do"
+            exit 0
+          fi
+
+          # Complete the merge (works even for an empty merge commit, which
+          # records upstream as merged so we don't retry every day) and push.
           git commit --no-edit
           git push origin main

@@ -1,5 +1,5 @@
 import { useRoadtripSettings } from '../../hooks/useRoadtripSettings'
-import { assembleRoadtrip, foldRouteRun, type RoadtripStop, type RoadtripRoutes, type PlanDay, type QuietDay, type RoutedLeg } from '@trek/shared/roadtrip'
+import { assembleRoadtrip, carrierLegsFor, carrierSeam, foldRouteRun, isCarrierMode, seatCarrierStops, standsAsDay, terminalAssignmentId, viasLeaving, type CarrierSeam, type RoadtripStop, type RoadtripRoutes, type PlanDay, type QuietDay, type RoutedLeg } from '@trek/shared/roadtrip'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { calculateRouteWithLegs, RoutingRefusedError } from '../Map/RouteCalculator'
 import { resolveLegMode } from '../Planner/legMode'
@@ -7,7 +7,7 @@ import { splitIntoRuns, parseAvoid, type DriveLimits } from './roadtripModel'
 import { spillChains } from './nightSpill'
 import { useSettingsStore } from '../../store/settingsStore'
 import { useVehicleRange } from './useVehicleRange'
-import type { Assignment, AssignmentsMap, Accommodation, Day, RouteAvoidClass, SnappedWaypoint } from '../../types'
+import type { Assignment, AssignmentsMap, Accommodation, Day, Reservation, RouteAvoidClass, SnappedWaypoint } from '../../types'
 import type { RoadtripVia, RoadtripDayBoundary } from '@trek/shared'
 import { dayWindow } from './dayWindow'
 import { useTranslation } from '../../i18n/TranslationContext'
@@ -60,9 +60,7 @@ const stopKey = (s: RoadtripStop): string =>
  * so the two cannot drift and quietly stop refetching.
  */
 const seamShape = (from: RoadtripStop, viasByDay: Record<number, RoadtripVia[]>): string =>
-  (viasByDay[from.ownerDayId] ?? [])
-    .filter(v => v.after_order_index === from.ownerIndex)
-    .sort((a, b) => a.sequence - b.sequence)
+  viasLeaving(from, viasByDay[from.ownerDayId] ?? [])
     .map(v => `${v.lat.toFixed(5)},${v.lng.toFixed(5)}`)
     .join('|')
 
@@ -70,6 +68,7 @@ const seamShape = (from: RoadtripStop, viasByDay: Record<number, RoadtripVia[]>)
 const legKey = (from: RoadtripStop, to: RoadtripStop): string => `${stopKey(from)}>${stopKey(to)}`
 
 const EMPTY_ACCOMMODATIONS: Accommodation[] = []
+const EMPTY_RESERVATIONS: Reservation[] = []
 
 const asStop = (a: Assignment, ownerDayId: number, ownerIndex: number, accommodations: Accommodation[]): RoadtripStop | null => {
   const p = a.place
@@ -91,6 +90,7 @@ const asStop = (a: Assignment, ownerDayId: number, ownerIndex: number, accommoda
     // traveller's own statement about this stop, and the stay then runs until it.
     leaveAt: a.assignment_end_time ?? p.end_time ?? null,
     checkInTime: stay?.check_in ?? null,
+    night: stay !== undefined,
     dwellMinutes: typeof p.duration_minutes === 'number' ? p.duration_minutes : null,
     endDay: a.end_day === true,
     legMode: a.leg_transport_mode ?? null,
@@ -126,6 +126,13 @@ export function useRoadtripRoutes(
   viasByDay: Record<number, RoadtripVia[]> = {},
   boundaries: RoadtripDayBoundary[] = [],
   accommodations: Accommodation[] = EMPTY_ACCOMMODATIONS,
+  /**
+   * The trip's bookings, for the ones the traveller rides (#2428). A flight, train,
+   * ferry, cruise or bus with located terminals seams the drive: the road ends at the
+   * terminal it leaves from and starts again at the one it lands at, and the leg
+   * between the two is the ride, never a road.
+   */
+  reservations: Reservation[] = EMPTY_RESERVATIONS,
 ): RoadtripRoutes {
   const { t } = useTranslation()
   const routeProfile = fallbackProfile || 'driving'
@@ -201,47 +208,70 @@ export function useRoadtripRoutes(
     [legMinutes, dayMinutes, planningRangeKm, fillPercent],
   )
 
-  const plan = useMemo<PlanDay[]>(() => {
+  // The seams the bookings make. Only the rides matter here, and only their days,
+  // clocks, terminals and seats, so a renamed booking or a new note on it changes nothing.
+  const rideSeams = useMemo<CarrierSeam[]>(
+    () => reservations.map(r => carrierSeam(r)).filter((seam): seam is CarrierSeam => seam !== null),
+    [reservations],
+  )
+
+  // Every stored day as the road trip reads it: its located stops in stored order, with
+  // the terminals of its rides seated among them. Built once and split below, because
+  // the two halves are one list read two ways.
+  const storedDays = useMemo<PlanDay[]>(() => {
     return [...days]
       .sort((a, b) => (a.day_number ?? 0) - (b.day_number ?? 0))
       .map(d => {
-        const stops = (assignments[String(d.id)] ?? [])
+        const located = (assignments[String(d.id)] ?? [])
           .slice()
           .sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
-          .map(a => asStop(a, d.id, 0, accommodations))
-          .filter((s): s is RoadtripStop => s !== null)
-          // The index is filled in after the drop, because it is the index into THIS
-          // list: an assignment whose place has no coordinates never becomes a stop, and
-          // counting before the filter would name a row the rail does not draw.
-          .map((s, i) => ({ ...s, ownerIndex: i }))
+          .map(a => ({ assignment: a, stop: asStop(a, d.id, 0, accommodations) }))
+          .filter((x): x is { assignment: Assignment; stop: RoadtripStop } => x.stop !== null)
+        // The index is filled in after the drop, because it is the index into THIS
+        // list: an assignment whose place has no coordinates never becomes a stop, and
+        // counting before the filter would name a row the rail does not draw.
+        const stops = located.map((x, i) => ({ ...x.stop, ownerIndex: i }))
         return {
           dayId: d.id,
           dayNumber: d.day_number ?? 0,
           date: d.date ?? null,
           title: d.title ?? null,
-          stops,
+          stops: seatCarrierStops(d.id, stops, located.map((x, i) => x.assignment.order_index ?? i), rideSeams),
         }
       })
-      .filter(d => d.stops.length > 1)
-  }, [days, assignments, accommodations])
+  }, [days, assignments, accommodations, rideSeams])
 
-  const quietDays = useMemo<QuietDay[]>(() => {
-    return [...days]
-      .sort((a, b) => (a.day_number ?? 0) - (b.day_number ?? 0))
-      .map(d => ({
-        dayId: d.id,
-        dayNumber: d.day_number ?? 0,
-        date: d.date ?? null,
-        title: d.title ?? null,
-        stops: (assignments[String(d.id)] ?? [])
-          .slice()
-          .sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
-          .map(a => asStop(a, d.id, 0, accommodations))
-          .filter((s): s is RoadtripStop => s !== null)
-          .map((s, i) => ({ ...s, ownerIndex: i })),
-      }))
-      .filter(d => d.stops.length < 2)
-  }, [days, assignments, accommodations])
+  const plan = useMemo<PlanDay[]>(() => storedDays.filter(d => standsAsDay(d.stops)), [storedDays])
+
+  const quietDays = useMemo<QuietDay[]>(() => storedDays.filter(d => !standsAsDay(d.stops)), [storedDays])
+
+  /** Days apart, for a ride that lands on a later day than it left. */
+  const dayNumberOf = (dayId: number): number => days.find(d => d.id === dayId)?.day_number ?? 0
+
+  /**
+   * The leg between the two terminals of every ride, keyed like a routed leg.
+   *
+   * Derived from the bookings rather than fetched, and kept out of the routing round on
+   * purpose: that round only runs when the geometry changes, and a ride's minutes come
+   * from its clocks. Filed inside the round, an edited departure time left the old
+   * minutes in place until something else re-routed, so the chain reached the arrival
+   * terminal late for a flight that had been moved earlier.
+   */
+  const rideLegs = useMemo(() => {
+    const terminals = new Map<number, { stop: RoadtripStop; dayNumber: number }>()
+    for (const day of storedDays)
+      for (const stop of day.stops)
+        if (stop.carrier) terminals.set(stop.assignmentId, { stop, dayNumber: day.dayNumber })
+    const out: Record<string, RoutedLeg> = {}
+    for (const seam of rideSeams) {
+      if (seam.kind !== 'ride') continue
+      const dep = terminals.get(terminalAssignmentId(seam.reservationId, 'departure'))
+      const arr = terminals.get(terminalAssignmentId(seam.reservationId, 'arrival'))
+      if (!dep || !arr) continue
+      Object.assign(out, carrierLegsFor([dep.stop, arr.stop], seam.type, () => arr.dayNumber - dep.dayNumber, legKey))
+    }
+    return out
+  }, [storedDays, rideSeams])
 
   // Only the geometry decides whether legs have to be re-fetched: renaming a place or
   // editing its notes must not fire a routing round.
@@ -300,6 +330,17 @@ export function useRoadtripRoutes(
      * into a burst at the one host that refused it.
      */
     const enqueueRun = (day: PlanDay, dayLegs: Record<string, RoutedLeg>, run: RoadtripStop[], mode: string): void => {
+      // A ride is no road, so no router is asked. The two ends of a booked ride have
+      // their leg in `rideLegs`, which keeps step with an edited timetable; a terminal
+      // standing beside an ordinary stop is the other carrier-mode pair, and it still
+      // needs a leg of its own. Without one `computeSchedule` loses its cursor there and
+      // every arrival behind it goes blank. A run is one stored day, so its ends are
+      // never days apart.
+      if (isCarrierMode(mode)) {
+        const legs = carrierLegsFor(run, mode, () => 0, legKey) ?? {}
+        for (const [key, leg] of Object.entries(legs)) if (!rideLegs[key]) dayLegs[key] = leg
+        return
+      }
       /** The same stops, as one request per pair. A pair has nothing left to split. */
       const splitIntoPairs = (): void => {
         if (run.length <= 2) return
@@ -322,9 +363,7 @@ export function useRoadtripRoutes(
           // index — this used to be the position within the chain, so on any day that
           // received a night drive every via matched nothing and quietly stopped
           // shaping the road.
-          ;(viasByDay[stop.ownerDayId ?? day.dayId] ?? [])
-            .filter(v => v.after_order_index === (stop.ownerIndex ?? i))
-            .sort((a, b) => a.sequence - b.sequence)
+          viasLeaving(stop, viasByDay[stop.ownerDayId ?? day.dayId] ?? [])
             .forEach(v => waypoints.push({ lat: v.lat, lng: v.lng }))
         })
 
@@ -404,22 +443,29 @@ export function useRoadtripRoutes(
     // routes a single day; a road trip is every leg of every day at once, and the
     // public routing hosts answer that with 429 after the first handful. Results are
     // published as they land so the rail fills in instead of sitting empty.
+    const publish = (): void => {
+      setLegsByDay({ ...collected })
+      setSnapByDay({ ...collectedSnaps })
+      setMissedByDay({ ...collectedMisses })
+    }
     void (async () => {
       for (let i = 0; i < tasks.length; i++) {
         if (controller.signal.aborted) return
         const startedAt = performance.now()
         await tasks[i]()
         if (controller.signal.aborted) return
-        setLegsByDay({ ...collected })
-        setSnapByDay({ ...collectedSnaps })
-        setMissedByDay({ ...collectedMisses })
+        publish()
         // Only pace what actually went out. RouteCalculator answers a repeat from its
         // cache in well under a millisecond, and switching back into road trip mode is
         // all repeats — waiting a second between those made a warm view feel broken.
         const wasNetwork = performance.now() - startedAt > CACHE_HIT_MS
         if (wasNetwork && i < tasks.length - 1) await sleep(REQUEST_SPACING_MS, controller.signal)
       }
-      if (!controller.signal.aborted) setLoading(false)
+      if (controller.signal.aborted) return
+      // A plan that is nothing but rides asked for no road, and still replaces what
+      // the last round left behind.
+      if (!tasks.length) publish()
+      setLoading(false)
     })()
 
     return () => controller.abort()
@@ -443,9 +489,10 @@ export function useRoadtripRoutes(
     // every routing round while `seamLegs` only ever grows, so a pair that used to sit on
     // a day boundary and now sits inside one day keeps an answer nobody re-asks for, and
     // that older answer was shaped by the vias of a stop that has since moved. Where both
-    // exist the day run is the newer of the two, so it is the one to believe.
-    return { ...seamLegs, ...out }
-  }, [plan, legsByDay, seamLegs])
+    // exist the day run is the newer of the two, so it is the one to believe. The rides
+    // last: a ride is never a road, whatever was fetched for its pair.
+    return { ...seamLegs, ...out, ...rideLegs }
+  }, [plan, legsByDay, seamLegs, rideLegs])
 
   // Which date each stop is actually reached on. Nothing is written to make it so; see
   // `nightSpill.ts`.
@@ -464,6 +511,8 @@ export function useRoadtripRoutes(
   const seams = useMemo(() => {
     const out: { from: RoadtripStop; to: RoadtripStop; dayId: number }[] = []
     const want = (from: RoadtripStop, to: RoadtripStop, dayId: number): void => {
+      // The two ends of one ride: the leg between them is the booking's, never a road.
+      if (rideLegs[legKey(from, to)]) return
       // Routed as part of a day's own run — that request is rebuilt whenever its vias
       // change, so there is nothing to catch up here.
       if (legsByDay[from.ownerDayId]?.[legKey(from, to)]) return
@@ -497,7 +546,7 @@ export function useRoadtripRoutes(
       }
     }
     return out
-  }, [chains, plan, quietDays, window, legsByDay, seamLegs, viasByDay, connectDays])
+  }, [chains, plan, quietDays, window, legsByDay, seamLegs, rideLegs, viasByDay, connectDays])
   const seamKey = seams.map(s => `${legKey(s.from, s.to)}#${seamShape(s.from, viasByDay)}`).join(';')
   /** When the last seam request went out, across every run of the effect below. */
   const lastSeamRequestAt = useRef(0)
@@ -508,6 +557,22 @@ export function useRoadtripRoutes(
     void (async () => {
       for (const seam of seams) {
         if (controller.signal.aborted) return
+        const mode = resolveLegMode(
+          { isPlace: true, leg_transport_mode: seam.from.legMode },
+          { isPlace: true, incoming_leg_transport_mode: seam.to.incomingLegMode },
+          days.find(d => d.id === seam.dayId)?.default_transport_mode || routeProfile,
+        )
+        // No router knows a ride. A booked ride's own pair has its leg in `rideLegs` and
+        // never reaches here; what is left is a terminal seamed to an ordinary stop on
+        // another card, which is a join of no minutes rather than a road. Filed here,
+        // above the pacing block, so it spends no request slot.
+        if (isCarrierMode(mode)) {
+          const key = legKey(seam.from, seam.to)
+          const legs = carrierLegsFor([seam.from, seam.to], mode, (from, to) => dayNumberOf(to.ownerDayId) - dayNumberOf(from.ownerDayId), legKey)
+          const leg = legs?.[key]
+          if (leg) setSeamLegs(prev => ({ ...prev, [key]: { ...leg, shape: seamShape(seam.from, viasByDay) } }))
+          continue
+        }
         // Paced before the request, against a clock that outlives this effect.
         //
         // Waiting AFTER one instead spaced nothing: storing a seam changes
@@ -522,19 +587,12 @@ export function useRoadtripRoutes(
         if (since < REQUEST_SPACING_MS) await sleep(REQUEST_SPACING_MS - since, controller.signal)
         if (controller.signal.aborted) return
         lastSeamRequestAt.current = performance.now()
-        const mode = resolveLegMode(
-          { isPlace: true, leg_transport_mode: seam.from.legMode },
-          { isPlace: true, incoming_leg_transport_mode: seam.to.incomingLegMode },
-          days.find(d => d.id === seam.dayId)?.default_transport_mode || routeProfile,
-        )
         try {
           // The via points on this seam, threaded in the same way the day runs thread
           // theirs. Without them a seam is the one stretch of the trip a via cannot
           // shape: it is asked for on its own, so the points the traveller dropped on it
           // never reached the router and dragging one did visibly nothing.
-          const shaping = (viasByDay[seam.from.ownerDayId] ?? [])
-            .filter(v => v.after_order_index === seam.from.ownerIndex)
-            .sort((a, b) => a.sequence - b.sequence)
+          const shaping = viasLeaving(seam.from, viasByDay[seam.from.ownerDayId] ?? [])
           const r = await calculateRouteWithLegs(
             [
               { lat: seam.from.lat, lng: seam.from.lng },

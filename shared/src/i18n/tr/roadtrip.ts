@@ -270,5 +270,11 @@ const roadtrip: TranslationStrings = {
   'roadtrip.stay.releaseBody': '“{name}” konumundaki gece kaldırılacak. Durak, yolculukta mola olarak kalır.',
   'roadtrip.stay.releaseBookedBody': '“{name}” konumundaki gece, “{booking}” rezervasyonu ve ona bağlı tüm harcamalarla birlikte kaldırılacak. Durak, yolculukta mola olarak kalır.',
   'roadtrip.stay.releaseAction': 'Molaya çevir',
+  'roadtrip.ride.departure': 'Kalkış {time}',
+  'roadtrip.ride.arrival': 'Varış {time}',
+  'roadtrip.ride.pickup': 'Alış {time}',
+  'roadtrip.ride.return': 'İade {time}',
+  'roadtrip.ride.open': 'Rezervasyonu aç',
+  'roadtrip.bookings.loose': 'Bu gün için ayrıca rezerve edildi',
 };
 export default roadtrip;

@@ -269,5 +269,11 @@ const roadtrip: TranslationStrings = {
   'roadtrip.stay.releaseBody': 'Ночівлю в «{name}» буде вилучено. Зупинка залишиться на маршруті як пауза.',
   'roadtrip.stay.releaseBookedBody': 'Ночівлю в «{name}» буде вилучено разом із бронюванням «{booking}» і пов’язаними витратами. Зупинка залишиться на маршруті як пауза.',
   'roadtrip.stay.releaseAction': 'Зробити паузою',
+  'roadtrip.ride.departure': 'Відправлення {time}',
+  'roadtrip.ride.arrival': 'Прибуття {time}',
+  'roadtrip.ride.pickup': 'Отримання {time}',
+  'roadtrip.ride.return': 'Повернення {time}',
+  'roadtrip.ride.open': 'Відкрити бронювання',
+  'roadtrip.bookings.loose': 'Також заброньовано цього дня',
 };
 export default roadtrip;

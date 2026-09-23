@@ -268,5 +268,11 @@ const roadtrip: TranslationStrings = {
   'roadtrip.stay.releaseBody': 'Nocleg w „{name}” zostanie usunięty. Przystanek pozostaje na trasie jako postój.',
   'roadtrip.stay.releaseBookedBody': 'Nocleg w „{name}” zostanie usunięty razem z rezerwacją „{booking}” i powiązanymi wydatkami. Przystanek pozostaje na trasie jako postój.',
   'roadtrip.stay.releaseAction': 'Zamień na postój',
+  'roadtrip.ride.departure': 'Odjazd {time}',
+  'roadtrip.ride.arrival': 'Przyjazd {time}',
+  'roadtrip.ride.pickup': 'Odbiór {time}',
+  'roadtrip.ride.return': 'Zwrot {time}',
+  'roadtrip.ride.open': 'Otwórz rezerwację',
+  'roadtrip.bookings.loose': 'Zarezerwowane też tego dnia',
 };
 export default roadtrip;

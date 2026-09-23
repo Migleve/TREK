@@ -264,5 +264,11 @@ const roadtrip: TranslationStrings = {
   'roadtrip.stay.releaseBody': 'ستُزال ليلة المبيت في "{name}". تبقى المحطة على الرحلة كاستراحة.',
   'roadtrip.stay.releaseBookedBody': 'ستُزال ليلة المبيت في "{name}" مع الحجز "{booking}" وأي مصروف مرتبط به. تبقى المحطة على الرحلة كاستراحة.',
   'roadtrip.stay.releaseAction': 'اجعلها استراحة',
+  'roadtrip.ride.departure': 'المغادرة {time}',
+  'roadtrip.ride.arrival': 'الوصول {time}',
+  'roadtrip.ride.pickup': 'الاستلام {time}',
+  'roadtrip.ride.return': 'الإرجاع {time}',
+  'roadtrip.ride.open': 'فتح الحجز',
+  'roadtrip.bookings.loose': 'محجوز أيضًا في هذا اليوم',
 };
 export default roadtrip;

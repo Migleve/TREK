@@ -101,14 +101,15 @@ vi.mock('../shared/Toast', () => ({
 
 // ── Permissions mock ────────────────────────────────────────────────────────
 
-// Flipped per test to render the read-only variants of the day rows.
-const mockPermissions = vi.hoisted(() => ({ canEdit: true }))
+// Flipped per test to render the read-only variants of the day rows; `denied`
+// takes single actions away from an otherwise editing member.
+const mockPermissions = vi.hoisted(() => ({ canEdit: true, denied: new Set<string>() }))
 
 vi.mock('../../store/permissionsStore', async (importOriginal) => {
   const actual = await importOriginal() as any
   return {
     ...actual,
-    useCanDo: () => () => mockPermissions.canEdit,
+    useCanDo: () => (action: string) => mockPermissions.canEdit && !mockPermissions.denied.has(action),
   }
 })
 
@@ -182,6 +183,7 @@ beforeEach(() => {
   resetAllStores()
   vi.clearAllMocks()
   mockPermissions.canEdit = true
+  mockPermissions.denied.clear()
   // clearAllMocks keeps implementations, so tests that swap the router out would
   // otherwise leak into the ones after them.
   vi.mocked(calculateRouteWithLegs).mockImplementation(waypoints => Promise.resolve({
@@ -221,6 +223,17 @@ describe('DayPlanSidebar', () => {
   it('FE-PLANNER-DAYPLAN-001: renders without crashing', () => {
     render(<DayPlanSidebar {...makeDefaultProps()} />)
     expect(document.body).toBeInTheDocument()
+  })
+
+  it('FE-PLANNER-DAYPLAN-001b: the panel yields to whatever the desktop shell puts above it', () => {
+    // With the Days / Road trip switch above it, a panel sized by height alone ran the
+    // switch's height past the clipped edge and the last day could never be scrolled
+    // into view. jsdom lays nothing out, so the sizing itself is the assertion.
+    const { container } = render(<DayPlanSidebar {...makeDefaultProps()} />)
+    const panel = container.firstElementChild as HTMLElement
+    expect(panel.style.flex).toBe('1 1 0%')
+    expect(panel.style.minHeight).toBe('0px')
+    expect(panel.style.height).toBe('100%')
   })
 
   it('FE-PLANNER-DAYPLAN-002: renders day titles', () => {
@@ -925,6 +938,18 @@ describe('DayPlanSidebar', () => {
     fireEvent.contextMenu(screen.getByText('Louvre Museum'))
     await user.click(screen.getByText('Edit'))
     expect(onEditPlace).toHaveBeenCalledWith(place, assignment.id)
+  })
+
+  it('FE-PLANNER-DAYPLAN-214: without place_edit the menu still removes from the day but neither edits nor deletes the place (#2446)', () => {
+    mockPermissions.denied.add('place_edit')
+    const place = buildPlace({ id: 42, name: 'Louvre Museum' })
+    const day = buildDay({ id: 10, date: '2025-06-01', title: 'Day 1' })
+    const assignment = buildAssignment({ id: 99, day_id: 10, order_index: 0, place })
+    render(<DayPlanSidebar {...makeDefaultProps({ days: [day], places: [place], assignments: { '10': [assignment] } })} />)
+    fireEvent.contextMenu(screen.getByText('Louvre Museum'))
+    expect(screen.getByText(/Remove from day/i)).toBeInTheDocument()
+    expect(screen.queryByText('Edit')).not.toBeInTheDocument()
+    expect(screen.queryByText('Delete')).not.toBeInTheDocument()
   })
 
   // ── Arrow reorder buttons ────────────────────────────────────────────────

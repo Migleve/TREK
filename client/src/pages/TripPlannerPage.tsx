@@ -10,6 +10,7 @@ import { TripRouteOverviewPill, TripRouteOverviewPanel } from '../components/Map
 import { DawarichTrailPill } from '../components/Map/DawarichTrailPill'
 import { getCached, fetchPhoto } from '../services/photoService'
 import DayPlanSidebar from '../components/Planner/DayPlanSidebar'
+import { DayPlanSidebarTransportDetailModal } from '../components/Planner/DayPlanSidebarTransportDetailModal'
 import RoadtripModeSwitch from '../components/Roadtrip/RoadtripModeSwitch'
 import TripLoadingSplash from '../components/shared/TripLoadingSplash'
 import PlacesSidebar from '../components/Planner/PlacesSidebar'
@@ -254,7 +255,7 @@ function TripPlannerPageDesktop(): React.ReactElement | null {
   // Page = wiring container: the entire planner state machine (store, tabs,
   // selection, CRUD handlers with undo, map filters, splash) lives in the hook.
   const {
-    tripId, navigate, toast, t, language, placesPhotosEnabled,
+    tripId, navigate, toast, t, language, locale, settings, placesPhotosEnabled,
     trip, days, places, assignments, packingItems, todoItems, categories, reservations, budgetItems, files,
     selectedDayId, isLoading, tripActions, can, canUploadFiles,
     pushUndo, undo, canUndo, lastActionLabel, handleUndo,
@@ -296,7 +297,7 @@ function TripPlannerPageDesktop(): React.ReactElement | null {
     mobileSidebarOpen, setMobileSidebarOpen, mobilePlanScrollTopRef, mobilePlacesScrollTopRef,
     deletePlaceId, setDeletePlaceId, deletePlaceIds, setDeletePlaceIds, deletePlaceNote, deletePlacesNote,
     stayRelease, setStayRelease, confirmStayRelease,
-    visibleConnections, toggleConnection, allConnectionsShown, toggleAllConnections, mapTransportDetail, setMapTransportDetail,
+    visibleConnections, roadtripConnections, toggleConnection, allConnectionsShown, toggleAllConnections, mapTransportDetail, setMapTransportDetail,
     isMobile, isTouch,
     expandedDayIds, setExpandedDayIds, mapPlaces,
     route, routeSegments, routeInfo, setRoute, setRouteInfo, updateRouteForDay,
@@ -445,7 +446,9 @@ function TripPlannerPageDesktop(): React.ReactElement | null {
               hasDayDetail={!!showDayDetail && !selectedPlace}
               reservations={reservations}
               showReservationStats={true}
-              visibleConnectionIds={visibleConnections}
+              // In road trip mode the rides that seam the drive are drawn as their own arcs
+              // beside the roads, on top of what the reader switched on under Days.
+              visibleConnectionIds={roadtripActive ? roadtripConnections : visibleConnections}
               onReservationClick={(rid) => {
                 const r = reservations.find(x => x.id === rid)
                 if (r) setMapTransportDetail(r)
@@ -596,6 +599,16 @@ function TripPlannerPageDesktop(): React.ReactElement | null {
                       onFocusPoint={focusRoadtripPoint}
                       selectedAssignmentId={selectedAssignmentId}
                       onSelectStop={(placeId, assignmentId) => handlePlaceClick(placeId, assignmentId)}
+                      reservations={reservations}
+                      onOpenBooking={(rid) => {
+                        const r = reservations.find(x => x.id === rid)
+                        if (!r) return
+                        // The day plan's own split: a transport has a detail view with
+                        // an edit button on it, a table or a ticket only has its editor.
+                        if (TRANSPORT_TYPES.has(r.type)) setMapTransportDetail(r)
+                        else openLinkedReservation?.(r)
+                      }}
+                      canEditBookings={can('reservation_edit', trip)}
                       onReorderStop={can('day_edit', trip) ? reorderRoadtripStop : undefined}
                       onMoveStopToDay={can('day_edit', trip) ? moveRoadtripStopToDay : undefined}
                       onAskAlternatives={can('day_edit', trip) ? askRouteAlternatives : undefined}
@@ -611,6 +624,18 @@ function TripPlannerPageDesktop(): React.ReactElement | null {
                       onAcceptRefuel={can('day_edit', trip) ? acceptRefuel : undefined}
                       collapsedDayIds={collapsedRoadtripDays}
                       onToggleDay={toggleRoadtripDay}
+                    />
+                    {/* The booking a terminal, a ride pill or a map endpoint opens. Under
+                        Days the day panel owns this dialog; here the day panel is not
+                        mounted, so the rail has to bring it along (#2428). */}
+                    <DayPlanSidebarTransportDetailModal
+                      transportDetail={mapTransportDetail}
+                      setTransportDetail={setMapTransportDetail}
+                      onNavigateToFiles={() => handleTabChange('dateien')}
+                      onEdit={can('day_edit', trip) ? (reservation) => { setMapTransportDetail(null); setEditingTransport(reservation); setTransportModalDayId(reservation.day_id ?? null); setShowTransportModal(true) } : undefined}
+                      t={t}
+                      locale={locale}
+                      timeFormat={settings.time_format || '24h'}
                     />
                   </LazyPanel>
                 ) : (

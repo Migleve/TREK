@@ -4,8 +4,34 @@ import type { AutomaticNight } from './dayWindow';
 import type { SpillMark } from './nightSpill';
 import type { Schedule, ScheduleWarning, DayWarning, DryPoint } from './roadtripModel';
 
+/**
+ * A point a booking puts on the drive: the airport, station or port a flight, train,
+ * ferry, cruise or bus leaves from or lands at, or the desk a hire car is picked up at
+ * or handed back at.
+ *
+ * For a ride the drive ends at the departure terminal and starts again at the arrival
+ * one; what happens in between is the booking's business, not the road's, and the leg
+ * between the two carries the ride's minutes and nothing else. A hire car's pick-up and
+ * return are points ON the road: the drive runs through them, it just starts or ends
+ * there.
+ */
+export interface CarrierTerminal {
+  reservationId: number;
+  /** flight | train | ferry | cruise | bus for a ride, car for a hire car. */
+  type: string;
+  role: 'departure' | 'arrival' | 'pickup' | 'return';
+  /** The booking's title, which is what the rail prints on the ride. */
+  title: string;
+  /** IATA code or station code, when the booking carries one. */
+  code: string | null;
+  /** The timetable's clock at this terminal, 'HH:mm' local, null when the booking names none. */
+  at: string | null;
+}
+
 export interface RoadtripStop {
   automaticNight?: AutomaticNight;
+  /** Set on the two ends of a carrier ride. Such a stop is no place and belongs to no assignment. */
+  carrier?: CarrierTerminal;
   assignmentId: number;
 
   ownerDayId: number;
@@ -25,6 +51,8 @@ export interface RoadtripStop {
 
   dwellMinutes: number | null;
   checkInTime?: string | null;
+  /** A booked night's stop on its check-in day, whether or not the booking names an hour. */
+  night?: boolean;
   endDay?: boolean;
 
   legMode: string | null;

@@ -849,3 +849,165 @@ describe('a visit End on the road trip', () => {
 vi.mock('../../hooks/useRoadtripSettings', () => ({
   useRoadtripSettings: (select: (preferences: import('@trek/shared').RoadtripPreferences) => unknown) => useSettingsStore(state => select(state.settings as import('@trek/shared').RoadtripPreferences)),
 }))
+
+describe('a booking the traveller rides (#2428)', () => {
+  const MUC: [number, number] = [48.3538, 11.7861]
+  const HAM: [number, number] = [53.6304, 9.9882]
+  const flight = (over: Record<string, unknown> = {}) => ({
+    id: 70,
+    trip_id: 7,
+    title: 'LH 2020 HAM → MUC',
+    type: 'flight',
+    status: 'confirmed',
+    day_id: 1,
+    end_day_id: 1,
+    reservation_time: '13:20',
+    reservation_end_time: '14:30',
+    endpoints: [
+      { role: 'from', sequence: 0, name: 'Hamburg Airport', code: 'HAM', lat: HAM[0], lng: HAM[1], timezone: null, local_time: null, local_date: null },
+      { role: 'to', sequence: 1, name: 'Munich Airport', code: 'MUC', lat: MUC[0], lng: MUC[1], timezone: null, local_time: null, local_date: null },
+    ],
+    ...over,
+  }) as unknown as import('../../types').Reservation
+
+  /** An hour for whatever pair the router is handed. */
+  const hourly = (points: { lat: number; lng: number }[]) => ({
+    coordinates: points.map(p => [p.lat, p.lng] as [number, number]),
+    distance: 100000 * (points.length - 1),
+    duration: 3600 * (points.length - 1),
+    legs: points.slice(1).map(() => ({ distance: 100000, duration: 3600, text: '' })),
+  })
+
+  afterEach(() => act(() => useSettingsStore.setState({ settings: { ...DEFAULT_SETTINGS } })))
+
+  it('FE-ROADTRIP-ROUTES-040: the terminals seam the day, the ride is never routed, and the roads to and from them are', async () => {
+    calculateRouteWithLegs.mockImplementation(async (points: { lat: number; lng: number }[]) => hourly(points))
+    const stops: StopSpec[] = [
+      { id: 1, at: HAMBURG, time: '09:00', dwell: 0 },
+      { id: 2, at: LUENEBURG, time: '10:00', dwell: 0 },
+      { id: 3, at: BERLIN, dwell: 0 },
+    ]
+    const { result } = renderHook(() => useRoadtripRoutes(7, [day(1, 1)], map(1, stops), 'driving', {}, [], [], [flight()]))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    const d = result.current.days[0]
+    expect(d.stops.map(s => s.carrier?.role ?? s.name)).toEqual(['Stop 1', 'Stop 2', 'departure', 'arrival', 'Stop 3'])
+    // Two road runs went to the router: up to the departure terminal, and from the arrival on.
+    expect(calculateRouteWithLegs).toHaveBeenCalledTimes(2)
+    const asked = calculateRouteWithLegs.mock.calls.map(c => c[0].map((p: { lat: number }) => p.lat))
+    expect(asked).toEqual([[HAMBURG[0], LUENEBURG[0], HAM[0]], [MUC[0], BERLIN[0]]])
+    expect(d.legs.map(l => l?.mode)).toEqual(['driving', 'driving', 'flight', 'driving'])
+    expect(d.legs[2]).toMatchObject({ distance: 0, duration: 70 * 60 })
+    // An hour ahead of the flight at the airport, off on the timetable, landed on it.
+    expect(d.schedule.entries.map(e => [e.arrival, e.departure])).toEqual([
+      ['09:00', '09:00'],
+      ['10:00', '10:00'],
+      ['12:20', '13:20'],
+      ['14:30', '14:30'],
+      ['15:30', '15:30'],
+    ])
+    // The ride draws no road of its own; the three road legs do.
+    expect(result.current.lines).toHaveLength(3)
+    expect(result.current.totalStops).toBe(3)
+    expect(result.current.totalDistance).toBe(300000)
+  })
+
+  it('FE-ROADTRIP-ROUTES-041: a ride landing on a later day seams two cards, and with connected days the ride is the join', async () => {
+    calculateRouteWithLegs.mockImplementation(async (points: { lat: number; lng: number }[]) => hourly(points))
+    act(() => useSettingsStore.setState({ settings: { ...DEFAULT_SETTINGS, roadtrip_connect_days: true } }))
+    const days = [day(1, 1), day(2, 2)]
+    const assignments = {
+      ...map(1, [{ id: 1, at: HAMBURG, time: '18:00', dwell: 0 }]),
+      ...map(2, [{ id: 2, at: BERLIN, dwell: 0 }]),
+    }
+    const overnight = flight({ reservation_time: '22:00', reservation_end_time: '07:00', end_day_id: 2 })
+    const { result } = renderHook(() => useRoadtripRoutes(7, days, assignments, 'driving', {}, [], [], [overnight]))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    await waitFor(() => expect(result.current.days[1]?.arrivingLeg?.mode).toBe('flight'))
+    expect(result.current.days[0].stops.map(s => s.carrier?.role ?? s.name)).toEqual(['Stop 1', 'departure'])
+    expect(result.current.days[1].stops.map(s => s.carrier?.role ?? s.name)).toEqual(['arrival', 'Stop 2'])
+    expect(result.current.days[1].schedule.entries[0].arrival).toBe('07:00')
+    // The join between the days is the ride, and the router was asked for the two roads only.
+    expect(calculateRouteWithLegs).toHaveBeenCalledTimes(2)
+    expect(result.current.days[1].arrivingLeg).toMatchObject({ mode: 'flight', duration: 9 * 3600, distance: 0 })
+  })
+
+  it('FE-ROADTRIP-ROUTES-044: an edited timetable changes the ride minutes without a routing round, and the chain is not late for it', async () => {
+    calculateRouteWithLegs.mockImplementation(async (points: { lat: number; lng: number }[]) => hourly(points))
+    const stops: StopSpec[] = [{ id: 1, at: HAMBURG, time: '09:00', dwell: 0 }, { id: 2, at: BERLIN, dwell: 0 }]
+    const { result, rerender } = renderHook(
+      ({ reservations }) => useRoadtripRoutes(7, [day(1, 1)], map(1, stops), 'driving', {}, [], [], reservations),
+      { initialProps: { reservations: [flight()] } },
+    )
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.days[0].legs[1]).toMatchObject({ mode: 'flight', duration: 70 * 60 })
+
+    // The same terminals, the same roads: the landing is now forty minutes after take-off.
+    rerender({ reservations: [flight({ reservation_end_time: '14:00' })] })
+    await waitFor(() => expect(result.current.days[0].legs[1]?.duration).toBe(40 * 60))
+    const d = result.current.days[0]
+    expect(d.legs[1]?.durationText).toBe('40 min')
+    expect(d.schedule.entries.map(e => e.arrival)).toEqual(['09:00', '12:20', '14:00', '15:00'])
+    expect(d.schedule.warnings.filter(w => w.code === 'late')).toEqual([])
+    expect(calculateRouteWithLegs).toHaveBeenCalledTimes(2)
+  })
+
+  it('FE-ROADTRIP-ROUTES-045: an overnight ride is the join between its cards, and a moved landing moves it too', async () => {
+    calculateRouteWithLegs.mockImplementation(async (points: { lat: number; lng: number }[]) => hourly(points))
+    act(() => useSettingsStore.setState({ settings: { ...DEFAULT_SETTINGS, roadtrip_connect_days: true } }))
+    const days = [day(1, 1), day(2, 2)]
+    const assignments = {
+      ...map(1, [{ id: 1, at: HAMBURG, time: '18:00', dwell: 0 }]),
+      ...map(2, [{ id: 2, at: BERLIN, dwell: 0 }]),
+    }
+    const overnight = (landing: string) => flight({ reservation_time: '22:00', reservation_end_time: landing, end_day_id: 2 })
+    const { result, rerender } = renderHook(
+      ({ reservations }) => useRoadtripRoutes(7, days, assignments, 'driving', {}, [], [], reservations),
+      { initialProps: { reservations: [overnight('07:00')] } },
+    )
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.days[1]?.arrivingLeg).toMatchObject({ mode: 'flight', duration: 9 * 3600 })
+    // The ride is derived, not fetched: the router saw the two roads and nothing else.
+    expect(calculateRouteWithLegs).toHaveBeenCalledTimes(2)
+    rerender({ reservations: [overnight('06:30')] })
+    await waitFor(() => expect(result.current.days[1]?.arrivingLeg?.duration).toBe(8.5 * 3600))
+    expect(result.current.days[1].schedule.entries[0].arrival).toBe('06:30')
+    expect(calculateRouteWithLegs).toHaveBeenCalledTimes(2)
+  })
+
+  it('FE-ROADTRIP-ROUTES-042: a booking without located terminals, or a taxi, changes nothing', async () => {
+    calculateRouteWithLegs.mockImplementation(async (points: { lat: number; lng: number }[]) => hourly(points))
+    const stops: StopSpec[] = [{ id: 1, at: HAMBURG }, { id: 2, at: BERLIN }]
+    const unlocated = flight({ endpoints: [] })
+    const taxi = flight({ id: 71, type: 'taxi' })
+    const { result } = renderHook(() => useRoadtripRoutes(7, [day(1, 1)], map(1, stops), 'driving', {}, [], [], [unlocated, taxi]))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.days[0].stops.every(s => !s.carrier)).toBe(true)
+    expect(calculateRouteWithLegs).toHaveBeenCalledTimes(1)
+  })
+
+  it('FE-ROADTRIP-ROUTES-043: a hire car puts its desks on the road, one run through both, and no ride', async () => {
+    calculateRouteWithLegs.mockImplementation(async (points: { lat: number; lng: number }[]) => hourly(points))
+    const stops: StopSpec[] = [{ id: 1, at: LUENEBURG, time: '10:00', dwell: 0 }, { id: 2, at: BERLIN, time: '14:00', dwell: 0 }]
+    const hireCar = flight({
+      id: 71,
+      type: 'car',
+      title: 'Sixt',
+      reservation_time: '09:00',
+      reservation_end_time: '18:00',
+      endpoints: [
+        { role: 'from', sequence: 0, name: 'Sixt Hamburg', code: null, lat: HAMBURG[0], lng: HAMBURG[1], timezone: null, local_time: null, local_date: null },
+        { role: 'to', sequence: 1, name: 'Sixt Berlin', code: null, lat: BERLIN[0] + 0.01, lng: BERLIN[1], timezone: null, local_time: null, local_date: null },
+      ],
+    })
+    const { result } = renderHook(() => useRoadtripRoutes(7, [day(1, 1)], map(1, stops), 'driving', {}, [], [], [hireCar]))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    const d = result.current.days[0]
+    expect(d.stops.map(s => s.carrier?.role ?? s.name)).toEqual(['pickup', 'Stop 1', 'Stop 2', 'return'])
+    // One road, the whole day, desk to desk.
+    expect(calculateRouteWithLegs).toHaveBeenCalledTimes(1)
+    expect(d.legs.map(l => l?.mode)).toEqual(['driving', 'driving', 'driving'])
+    expect(d.schedule.entries[0]).toMatchObject({ arrival: '09:00', departure: '09:00' })
+    expect(result.current.totalStops).toBe(2)
+    expect(result.current.lines).toHaveLength(3)
+  })
+})

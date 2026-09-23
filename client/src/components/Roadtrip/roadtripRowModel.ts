@@ -1,5 +1,5 @@
 import { isServiceStopType, type ScheduleEntry, type ScheduleWarning } from './roadtripModel'
-import type { RoadtripDay, RoadtripStop, RouteSegment } from '@trek/shared/roadtrip'
+import type { CarrierTerminal, RoadtripDay, RoadtripStop, RouteSegment } from '@trek/shared/roadtrip'
 import { readStay } from './stayReading'
 
 /**
@@ -21,13 +21,19 @@ export type RoadtripRow =
   | { kind: 'spill'; fromDayNumber: number; departs: string | null; stops: StopRow[] }
   | StopRow
   | { kind: 'leg'; index: number; seg: RouteSegment | undefined; mode: string | null }
+  /**
+   * A ride that leaves and lands on the day (#2428), as one row: the booking with both
+   * its terminals inside it, in place of two stop rows and the leg between them. The
+   * booking's minutes, no distance, and the road goes on from `arrival`.
+   */
+  | { kind: 'ride'; index: number; carrier: CarrierTerminal; seg: RouteSegment | undefined; departure: StopRow; arrival: StopRow }
   | { kind: 'dry'; legIndex: number; intoLegKm: number; sinceKm: number }
   | { kind: 'auto'; phase: 'end' | 'resume'; time: string | null }
 
 export interface StopRow {
   kind: 'stop'
   stop: RoadtripStop
-  /** Position in the day's numbering, or null for a service stop and an automatic night. */
+  /** Position in the day's numbering, or null for a service stop, a terminal and an automatic night. */
   number: number | null
   service: boolean
   entry: ScheduleEntry | undefined
@@ -132,6 +138,20 @@ function isStationary(seg: RouteSegment | undefined): boolean {
     && seg.from[1] === seg.to[1]
 }
 
+/**
+ * A leg too short to be a drive: the hire desk beside the terminal, the car park beside
+ * the gate. Under 150 m and two minutes it is a hop, and a pill reading "0 km in 0 min"
+ * under it is noise where the eye wants the next stop. The line still joins the two,
+ * and a note a plugin attached is still worth the row.
+ */
+export function isHop(seg: RouteSegment | undefined): boolean {
+  return !!seg
+    && Number.isFinite(seg.distance)
+    && seg.distance < 150
+    && seg.duration < 120
+    && !seg.noteText
+}
+
 export function roadtripRows(day: RoadtripDay): RoadtripRow[] {
   const rows: RoadtripRow[] = []
   const spills = day.spills ?? []
@@ -148,6 +168,13 @@ export function roadtripRows(day: RoadtripDay): RoadtripRow[] {
       })
     }
 
+    const next = day.stops[i + 1]
+    const prev = day.stops[i - 1]
+    const sameRide = (other: RoadtripStop | undefined): boolean =>
+      !!stop.carrier && other?.carrier?.reservationId === stop.carrier.reservationId
+    // The arrival of a same-day ride is inside the ride row its departure made.
+    if (stop.carrier?.role === 'arrival' && prev?.carrier?.role === 'departure' && sameRide(prev)) return
+
     const automatic = !!stop.automaticNight
     if (automatic) {
       rows.push({
@@ -155,22 +182,44 @@ export function roadtripRows(day: RoadtripDay): RoadtripRow[] {
         phase: stop.automaticNight?.phase === 'start' ? 'resume' : 'end',
         time: day.schedule.entries[i]?.arrival ?? null,
       })
+    } else if (stop.carrier?.role === 'departure' && next?.carrier?.role === 'arrival' && sameRide(next)) {
+      rows.push({
+        kind: 'ride',
+        index: i,
+        carrier: stop.carrier,
+        seg: day.legs[i],
+        departure: stopRow(stop, i, null, day.schedule, day.driveWarnings),
+        arrival: stopRow(next!, i + 1, null, day.schedule, day.driveWarnings),
+      })
+      // The road out of the arrival belongs to this row too; the pass below only
+      // looks at the index it is on.
+      pushLeg(i + 1)
+      return
     } else {
-      if (!isServiceStopType(stop.stopType)) number += 1
-      rows.push(stopRow(stop, i, isServiceStopType(stop.stopType) ? null : number, day.schedule, day.driveWarnings))
+      // A terminal or a hire car's desk is where the drive stops or resumes, not a
+      // place the trip is for: it carries no number, the way a service stop carries none.
+      const unnumbered = isServiceStopType(stop.stopType) || !!stop.carrier
+      if (!unnumbered) number += 1
+      rows.push(stopRow(stop, i, unnumbered ? null : number, day.schedule, day.driveWarnings))
     }
 
-    // The leg AFTER this stop, plus the dry point that falls on it. Both belong
-    // between two stops, so they are emitted here rather than in their own pass.
+    pushLeg(i)
+  })
+
+  // The leg AFTER stop `i`, plus the dry point that falls on it. Both belong between
+  // two stops, so they are emitted with the stop before them rather than in a pass of
+  // their own.
+  function pushLeg(i: number): void {
+    const stop = day.stops[i]!
     const seg = day.legs[i]
-    if (i < day.stops.length - 1 && !isStationary(seg)) {
+    if (i < day.stops.length - 1 && !isStationary(seg) && !isHop(seg)) {
       rows.push({ kind: 'leg', index: i, seg, mode: day.stops[i + 1]?.incomingLegMode ?? stop.legMode ?? null })
       const dry = (day.dryPoints ?? []).find(p => p.legIndex === i)
       if (dry) {
         rows.push({ kind: 'dry', legIndex: i, intoLegKm: dry.intoLegKm, sinceKm: dry.sinceKm })
       }
     }
-  })
+  }
 
   return rows
 }
@@ -191,13 +240,28 @@ export function legReroutable(day: RoadtripDay, index: number): boolean {
   return index >= 0
     && index < day.stops.length - 1
     && !!day.legs[index]
+    && !isHop(day.legs[index])
     && !day.stops[index].automaticNight
     && !day.stops[index + 1].automaticNight
+    // A leg leaving a terminal is either the ride, which has no other way, or the road
+    // out of an arrival, whose via would be filed at the terminal's index, which is the
+    // index of the stop after it. The road INTO a departure terminal leaves a stored
+    // stop and can be offered other ways like any other.
+    && !day.stops[index].carrier
 }
 
 /** Stops that carry a number, for a count that agrees with the numbering above. */
 export function destinationCount(day: RoadtripDay): number {
-  return day.stops.filter(s => !s.automaticNight && !isServiceStopType(s.stopType)).length
+  return day.stops.filter(s => !s.automaticNight && !s.carrier && !isServiceStopType(s.stopType)).length
+}
+
+/**
+ * The rows with each ride opened up into its two terminals, in place. A ride row holds
+ * them instead of two stop rows of their own, so a reader walking the rows for stops
+ * has to look inside it, or a day that ends on a flight ends at the stop before it.
+ */
+function unfoldRides(rows: readonly RoadtripRow[]): RoadtripRow[] {
+  return rows.flatMap(row => (row.kind === 'ride' ? [row.departure, row.arrival] : [row]))
 }
 
 /**
@@ -229,7 +293,7 @@ export function destinationCount(day: RoadtripDay): number {
 export function stageClocks(rows: readonly RoadtripRow[]): { start: string | null; arrive: string | null } {
   let start: string | null = null
   let arrive: string | null = null
-  for (const row of rows) {
+  for (const row of unfoldRides(rows)) {
     if (row.kind === 'stop' && row.time) {
       start ??= row.time
       arrive = row.time
@@ -241,7 +305,8 @@ export function stageClocks(rows: readonly RoadtripRow[]): { start: string | nul
 }
 
 /**
- * The stop a stage ends on: the last one the chain draws, a service stop included.
+ * The stop a stage ends on: the last one the chain draws, a service stop or the arrival
+ * terminal of a ride included.
  *
  * The map half names it in its bar and opens it on a tap, so the name, the clock beside it
  * and the sheet the tap brings up all come off this one row and cannot name three different
@@ -253,8 +318,9 @@ export function stageClocks(rows: readonly RoadtripRow[]): { start: string | nul
  * There is nothing for a tap to open then, and the bar says so by not being a button.
  */
 export function stageEnd(rows: readonly RoadtripRow[]): StopRow | null {
-  for (let i = rows.length - 1; i >= 0; i--) {
-    const row = rows[i]
+  const unfolded = unfoldRides(rows)
+  for (let i = unfolded.length - 1; i >= 0; i--) {
+    const row = unfolded[i]
     if (row.kind === 'stop') return row
   }
   return null
@@ -276,7 +342,7 @@ export function stageEnd(rows: readonly RoadtripRow[]): StopRow | null {
  */
 export function firstStopOfPlace(days: readonly RoadtripDay[], placeId: number): RoadtripStop | null {
   for (const day of days) {
-    const stop = day.stops.find(s => !s.automaticNight && s.placeId === placeId)
+    const stop = day.stops.find(s => !s.automaticNight && !s.carrier && s.placeId === placeId)
     if (stop) return stop
   }
   return null
@@ -300,7 +366,7 @@ export function upNextStop(
   isToday: boolean,
 ): { row: StopRow; minutesUntil: number } | null {
   if (!day || !isToday) return null
-  const timed = roadtripRows(day)
+  const timed = unfoldRides(roadtripRows(day))
     .filter((r): r is StopRow => r.kind === 'stop' && !r.service)
     .map(row => ({ row, at: clockMinutes(row.time) }))
     .filter((x): x is { row: StopRow; at: number } => x.at != null)

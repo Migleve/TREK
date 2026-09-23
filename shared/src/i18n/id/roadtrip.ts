@@ -271,5 +271,11 @@ const roadtrip: TranslationStrings = {
   'roadtrip.stay.releaseBody': 'Malam di “{name}” akan dihapus. Perhentian tetap ada di perjalanan sebagai jeda.',
   'roadtrip.stay.releaseBookedBody': 'Malam di “{name}” akan dihapus bersama pemesanan “{booking}” dan pengeluaran yang terkait. Perhentian tetap ada di perjalanan sebagai jeda.',
   'roadtrip.stay.releaseAction': 'Jadikan jeda',
+  'roadtrip.ride.departure': 'Berangkat {time}',
+  'roadtrip.ride.arrival': 'Tiba {time}',
+  'roadtrip.ride.pickup': 'Pengambilan {time}',
+  'roadtrip.ride.return': 'Pengembalian {time}',
+  'roadtrip.ride.open': 'Buka pemesanan',
+  'roadtrip.bookings.loose': 'Juga dipesan hari ini',
 };
 export default roadtrip;

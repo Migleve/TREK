@@ -268,5 +268,11 @@ const roadtrip: TranslationStrings = {
   'roadtrip.stay.releaseBody': 'A(z) „{name}” helyen töltött éjszaka törlődik. A megálló szünetként az útvonalon marad.',
   'roadtrip.stay.releaseBookedBody': 'A(z) „{name}” helyen töltött éjszaka a(z) „{booking}” foglalással és a hozzá kapcsolt kiadásokkal együtt törlődik. A megálló szünetként az útvonalon marad.',
   'roadtrip.stay.releaseAction': 'Legyen szünet',
+  'roadtrip.ride.departure': 'Indulás {time}',
+  'roadtrip.ride.arrival': 'Érkezés {time}',
+  'roadtrip.ride.pickup': 'Felvétel {time}',
+  'roadtrip.ride.return': 'Visszaadás {time}',
+  'roadtrip.ride.open': 'Foglalás megnyitása',
+  'roadtrip.bookings.loose': 'Erre a napra még lefoglalva',
 };
 export default roadtrip;

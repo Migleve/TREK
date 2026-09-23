@@ -112,7 +112,7 @@ Give a visit a **Start** in the place form and the chain restarts from it. That 
 - With nothing to count from (no pinned time, no check-in and no daily travel times), the rail shows driving times but no clock times.
 - **The schedule works backwards too.** Pin 10:00 on the second stop and the first one says when to set off, worked out from the drive and the stay. It stops at a leg that has not routed rather than inventing a duration.
 - A stop reached later than the time you set says so: *Arrives 15 min after the time you set*. The same warning appears on a fuel or charging halt that carries a time.
-- The **Check-in** of a booked night is not an appointment. Arriving before it means waiting for it, and it starts the day when nothing before it decides the hour. Arriving after it is simply arriving.
+- The **Check-in** of a booked night holds its stop the way a pinned time does: the day is built to be there by then, the chain restarts from it, and a drive that gets there later is late, with the same *Arrives 15 min after the time you set* warning a missed pin gets. A time pinned on the stop itself wins over the check-in.
 
 ## Daily travel times and day endings
 
@@ -277,10 +277,35 @@ A night booked anywhere, whether in the day panel, the booking form, on the phon
 
 - **Days** shows the night in the day header as always, and hides the stop so the hotel is not listed twice.
 - Moving the booking to another day moves its stop along; deleting the booking removes the stop it created. A stop you placed yourself is left standing.
-- The drive uses the booking's **Check-in** as the earliest arrival and the place's stay as its length. The check-out stays a booking detail.
+- The drive uses the booking's **Check-in** to anchor the stop, the way a pinned time anchors any other, and the place's stay as its length. A drive that cannot make the check-in is reported late. The check-out stays a booking detail.
+- **The night leads its day.** Its stop is seated first, behind only a stop whose own time is at or before the check-in, and the stops that carry no hour follow it: a hotel booked for ten in the morning is reached at ten, not at a quarter past twelve behind a whole day of untimed stops. A night without a check-in is seated first as well, a new check-in seats the stop afresh, and two nights booked on one day settle by their check-ins. A day that is nothing but its booked night stands among the days with the hotel and its check-in, instead of under the *Only {name} so far* placeholder.
+- One consequence to be aware of: a night booked for the end of a driving day heads that day too when its stops carry no time of their own, so the drive reads hotel first. To put the hotel back at the end, drag it down the rail: an edit to the booking that leaves the check-in alone will not undo that. A **Start** at or before the check-in does it as well, as long as it goes on the *first* stop after the hotel: the day re-sorts by time, and the untimed stops behind that one follow it. On the last stop alone it is not enough, because the untimed stops in front of it keep counting as being at the check-in and stay behind the hotel.
 - **Add as an overnight stay** from the search books the night and adds the stop in one go. The night runs to the next day; change the dates under **Days**. On the phone, booking a night works in the desktop planner only.
 
+Trips planned before 4.3.1 were seated the same way when the server upgraded, see [Upgrading to 4.3.1](Updating#upgrading-to-431).
+
 See [Accommodations](Accommodations#on-the-route) for the details.
+
+## Flights, trains and ferries on the drive
+
+A **Flight**, **Train**, **Ferry**, **Cruise** or **Bus** booking on a day is a seam in the drive: the road ends at the terminal the booking leaves from and starts again at the one it lands at. Nothing is routed across the ride, so a flight from Hamburg to Munich no longer turns into an eight-hour drive on the road trip map.
+
+- A ride that leaves and lands on the same day is one block on the day card: the booking and how long it takes at the top, then the terminal it leaves from and the one it lands at, each with the timetable under its name (*Departure 13:20*, *Arrival 14:30*) and the time the drive has you there on the right. The block opens the booking. A ride that lands on a later day shows its departure at the end of one day and its arrival at the start of the next, each as a row of its own.
+- The departure terminal is pinned a check-in ahead of the timetable (an hour for a flight or a cruise, half an hour for a ferry, ten minutes for a train or a bus). A drive that cannot get there by then is late, the way a missed pinned time is. The arrival terminal is pinned at the timetable's arrival, and the drive continues from it.
+- The map draws the ride as the booking's own line, the same arc the day plan draws, beside the roads.
+- The ride's hours and kilometres are the booking's, not the drive's: the day's distance and driving time count the roads only, the range budget spends nothing on a flight, and after a ride the car cannot take (a flight, a cruise, a bus) the range starts afresh, because the next road is driven in another car. A car ferry or a motorail keeps the budget.
+- A booking that lands on a later day seats its arrival at the start of that day. With **Connect the days** on, the join between the two days is the ride. With daily travel times set, the ride runs on the booking's clock: no day ends at the airport and no morning resumes on the plane.
+- The terminals sit where the day plan lists the booking: a position you dragged it to under Days, otherwise behind the last stop whose time is before the departure, otherwise at the end of the day. Move the booking under Days to move the seam.
+
+What the seam does not do: it never plans the ride itself, and a booking without located terminals (an airport TREK could not place, a train with no station coordinates) makes no seam and is left to the day plan. Via points and other ways of driving are offered for the road into a departure terminal, not for the ride or for the road out of an arrival, and the search along the route skips the ride. A taxi or a transit hop is not a seam: you stay on the road.
+
+### Hire cars
+
+A **Car** booking is not a seam, you drive it, but its desks are where the drive starts and ends. The pick-up desk stands on the day card as a row with the car icon and *Pick-up 09:00* under its name, and it opens the day when nothing timed comes before it. The return desk closes the day it is handed back on, with *Return 11:30*. The road runs through both like any other stop, the range budget starts from a full tank at the pick-up, and both rows open the booking. The return only appears when the booking names a return day and a located return desk; nothing is guessed.
+
+### Other bookings on the day
+
+A table, tickets or a tour booked on the day appear as chips under the stop they belong to: the stop the booking is pinned to, or the stop at the booking's place on that day. A chip shows the booking's icon, its name and the time it starts, and opens the booking. A booking on the day that belongs to no stop is listed under *Also booked this day* at the end of the card, so nothing you booked goes unseen in road trip mode. Nights are the stays, and rides and hire cars have their own rows, so none of them become chips.
 
 ## Car bookings with stops
 
@@ -316,8 +341,8 @@ With the [MCP](MCP-Overview) addon on as well, an assistant can plan and check a
 
 | Tool | What it does | Scope |
 |---|---|---|
-| `get_roadtrip_context` | Reads the saved days, visits, pinned times, End times, stays, kinds of stop, vias, followed tracks and day endings. | `trips:read` |
-| `calculate_roadtrip` | Works out arrivals, departures, day splits, driving limit and range warnings. Missing coordinates and routing failures are reported, not hidden. | `trips:read` |
+| `get_roadtrip_context` | Reads the saved days, visits, pinned times, End times, stays, kinds of stop, vias, followed tracks and day endings, plus a `carriers` block with the flight, train, ferry, cruise and bus bookings that seam the drive and the hire cars whose desks stand on it. | `trips:read` |
+| `calculate_roadtrip` | Works out arrivals, departures, day splits, driving limit and range warnings. Missing coordinates and routing failures are reported, not hidden. A booking's terminals and a hire car's desks come back as stops carrying `carrier` (its role, type and timetable); their `assignmentId` and `placeId` are synthetic negative numbers that belong to no assignment and no place, so never pass them to the assignment or place tools. | `trips:read` |
 | `get_roadtrip_settings`, `update_roadtrip_settings` | Read or change the trip's shared driving settings. | `trips:read`, `trips:write` |
 | `search_roadtrip_corridor` | Searches along a calculated day, with the same kinds, filters and sources as the panel. It never adds anything. | `trips:read` |
 | `list_route_vias`, `add_route_via`, `add_route_vias`, `update_route_via`, `reanchor_route_vias`, `remove_route_via` | List, add, move, re-pin and remove via points. | `trips:read`, `trips:write` |

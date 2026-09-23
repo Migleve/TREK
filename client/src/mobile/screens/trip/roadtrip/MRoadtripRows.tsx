@@ -3,14 +3,16 @@ import type { CSSProperties, ReactNode } from 'react'
 import MDancingTrek from '../../../components/MDancingTrek'
 import MIconBtn from '../../../components/MIconBtn'
 import { formatDurationShort, serviceColor } from '../../../../components/Roadtrip/roadtripModel'
+import { bookingOpens, carrierIcon, rideText, terminalLine } from '../../../../components/Roadtrip/carrierRide'
+import { bookingClock, bookingIcon } from '../../../../components/Roadtrip/stopBookings'
 import { STOP_KIND_BY_KEY } from '../../../../components/Roadtrip/stopKinds'
 import { formatDistance } from '../../../../utils/units'
 import { formatClockTime } from '../../../../utils/formatters'
-import type { StopRow } from '../../../../components/Roadtrip/roadtripRowModel'
+import type { RoadtripRow, StopRow } from '../../../../components/Roadtrip/roadtripRowModel'
 import type { RefuelSearch } from '../../../../components/Roadtrip/useRefuelSearch'
 import { REFUEL_EMPTY_KEY, REFUEL_WORDS, refuelBandState, type RefuelCandidate } from '../../../../components/Roadtrip/refuelSuggestion'
 import type { DistanceUnit, RouteSegment, ScheduleWarning } from '@trek/shared/roadtrip'
-import type { TranslationFn } from '../../../../types'
+import type { Reservation, TranslationFn } from '../../../../types'
 
 /**
  * The four row types of the mobile drive chain, plus the two bands that interrupt it.
@@ -52,6 +54,16 @@ export interface RowChrome {
  */
 function Disc({ row, t, onPickKind }: { row: StopRow; t: TranslationFn; onPickKind?: () => void }) {
   const kind = row.stop.stopType ? STOP_KIND_BY_KEY[row.stop.stopType] : undefined
+  // A terminal wears the booking's icon and is not a control: nobody turns an airport
+  // into a petrol station.
+  if (row.stop.carrier) {
+    const Icon = carrierIcon(row.stop.carrier.type)
+    return (
+      <span className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-full bg-[color:var(--m-ic)] text-m-ink">
+        <Icon size={15} strokeWidth={2.1} aria-hidden="true" />
+      </span>
+    )
+  }
   const face = row.service && kind
     ? (
       <span
@@ -134,6 +146,8 @@ export function RtStopRow({ row, chrome, onOpen, onPickKind }: {
     )
   }
   if (row.warning) marks.push(<span key="warn">{warningMark(row.warning, chrome)}</span>)
+  const terminal = row.stop.carrier ? terminalLine(row.stop.carrier, t, chrome.is12h) : null
+  if (terminal) marks.push(<span key="terminal" className="font-geist text-[0.65625rem] font-medium text-m-muted">{terminal}</span>)
   if (!marks.length && row.offRoadMeters) {
     marks.push(
       <Mark key="off" icon={<Footprints size={10} strokeWidth={2} />}>
@@ -171,6 +185,108 @@ export function RtStopRow({ row, chrome, onOpen, onPickKind }: {
 const LEG_ICONS: Record<string, typeof CarFront> = {
   walking: Footprints,
   cycling: Bike,
+}
+
+/** One end of a ride inside its block: name, code, the timetable line, the clock. */
+function RideEnd({ row, chrome }: { row: StopRow; chrome: RowChrome }) {
+  const carrier = row.stop.carrier!
+  const line = terminalLine(carrier, chrome.t, chrome.is12h)
+  return (
+    <span className="flex items-center gap-[8px]">
+      <span className="min-w-0 flex-1">
+        <span className="flex min-w-0 items-center gap-[6px]">
+          <span className="line-clamp-2 text-[0.875rem] font-semibold leading-[1.25] text-m-ink">{row.stop.name}</span>
+          {carrier.code && <span className="flex-none font-geist text-[0.65625rem] font-medium text-m-faint">{carrier.code}</span>}
+        </span>
+        {line && <span className="mt-[2px] block font-geist text-[0.65625rem] font-medium text-m-muted">{line}</span>}
+      </span>
+      {row.time && (
+        <span dir="ltr" className={`whitespace-nowrap text-[0.8125rem] tabular-nums ${row.pinned ? 'font-semibold text-m-ink' : 'font-medium text-m-faint'}`}>
+          {formatClockTime(row.time, chrome.is12h)}
+        </span>
+      )}
+    </span>
+  )
+}
+
+/**
+ * A ride that leaves and lands on the day, as one block in the chain (#2428): the
+ * booking and its minutes at the top, the terminal it leaves from, the terminal it lands
+ * at. One block on one disc, because it is one thing, and three rows read as three
+ * places the day went to. The block is the tap target and opens the booking, the same
+ * sheet the map's endpoint badge opens.
+ */
+export function RtRideRow({ row, chrome, onOpen }: {
+  row: Extract<RoadtripRow, { kind: 'ride' }>
+  chrome: RowChrome
+  onOpen?: () => void
+}) {
+  const Icon = carrierIcon(row.carrier.type)
+  const body = (
+    <>
+      <span className="flex items-center gap-[6px] text-m-muted">
+        <Icon size={12} strokeWidth={2} className="flex-none" aria-hidden="true" />
+        <span className="truncate font-geist text-[0.65625rem] font-semibold uppercase tracking-[0.06em]">{rideText(row.carrier, row.seg)}</span>
+      </span>
+      <RideEnd row={row.departure} chrome={chrome} />
+      <RideEnd row={row.arrival} chrome={chrome} />
+    </>
+  )
+  const cls = 'my-1 flex min-w-0 flex-col gap-[7px] rounded-[16px] bg-[color:var(--m-ic)] px-[12px] py-[9px] text-start'
+  return (
+    <div className="grid items-center gap-x-[10px] py-1" style={{ gridTemplateColumns: '34px 1fr' }}>
+      <span className="flex justify-center">
+        <span className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-full bg-[color:var(--m-ic)] text-m-ink">
+          <Icon size={15} strokeWidth={2.1} aria-hidden="true" />
+        </span>
+      </span>
+      {onOpen ? (
+        <button type="button" onClick={onOpen} className={cls}>{body}</button>
+      ) : (
+        <span className={cls}>{body}</span>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The bookings a stop carries, under its row (#2428): the table, the tickets, the tour,
+ * each a chip with the booking panel's icon, its name and the clock it starts at. Chips
+ * because a booking is a fact about the stop and not a stop of its own. A chip that
+ * opens is a button; one this reader may not open stays a plain chip, the rule the rail
+ * follows too (`bookingOpens`).
+ */
+export function RtBookingChips({ bookings, chrome, canEdit, onOpen }: {
+  bookings: Reservation[]
+  chrome: RowChrome
+  /** Whether a table's or a ticket's editor opens for this reader; see `bookingOpens`. */
+  canEdit: boolean
+  onOpen?: (reservation: Reservation) => void
+}) {
+  return (
+    <div className="grid gap-x-[10px] pb-2" style={{ gridTemplateColumns: '34px 1fr' }}>
+      <span aria-hidden="true" />
+      <span className="flex flex-wrap gap-[6px]">
+        {bookings.map(r => {
+          const Icon = bookingIcon(r.type)
+          const clock = bookingClock(r)
+          const body = (
+            <>
+              <Icon size={11} strokeWidth={2} className="flex-none text-m-muted" aria-hidden="true" />
+              <span className="min-w-0 truncate text-[0.75rem] font-medium text-m-ink">{r.title}</span>
+              {clock && <span className="flex-none font-geist text-[0.65625rem] tabular-nums text-m-faint">{formatClockTime(clock, chrome.is12h)}</span>}
+            </>
+          )
+          const cls = 'inline-flex h-[28px] max-w-full items-center gap-[5px] rounded-full border border-[color:var(--m-inbr)] bg-[color:var(--m-inner)] px-[10px]'
+          return onOpen && bookingOpens(r, canEdit) ? (
+            <button key={r.id} type="button" onClick={() => onOpen(r)} className={`${cls} text-start`}>{body}</button>
+          ) : (
+            <span key={r.id} className={cls}>{body}</span>
+          )
+        })}
+      </span>
+    </div>
+  )
 }
 
 /**

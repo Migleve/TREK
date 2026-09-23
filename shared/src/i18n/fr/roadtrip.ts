@@ -271,5 +271,11 @@ const roadtrip: TranslationStrings = {
   'roadtrip.stay.releaseBody': 'La nuit à « {name} » sera supprimée. L’arrêt reste sur le trajet comme pause.',
   'roadtrip.stay.releaseBookedBody': 'La nuit à « {name} » sera supprimée avec la réservation « {booking} » et toute dépense qui y est liée. L’arrêt reste sur le trajet comme pause.',
   'roadtrip.stay.releaseAction': 'En faire une pause',
+  'roadtrip.ride.departure': 'Départ {time}',
+  'roadtrip.ride.arrival': 'Arrivée {time}',
+  'roadtrip.ride.pickup': 'Prise en charge {time}',
+  'roadtrip.ride.return': 'Restitution {time}',
+  'roadtrip.ride.open': 'Ouvrir la réservation',
+  'roadtrip.bookings.loose': 'Également réservé ce jour',
 };
 export default roadtrip;

@@ -13,12 +13,12 @@ import { useSettingsStore } from '../../store/settingsStore'
 import CollectionPicker from '../Collections/CollectionPicker'
 import PlaceDetailsColumn, { type PlaceDetailsSelection } from './PlaceDetailsColumn'
 import { useToast } from '../shared/Toast'
-import { Search, Paperclip, X, AlertTriangle, Loader2, Plus } from 'lucide-react'
+import { Search, Paperclip, X, AlertTriangle, Loader2, Plus, RotateCcw } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import CustomTimePicker from '../shared/CustomTimePicker'
 import { DEFAULT_FORM, isMapUrl, mergeResult, type PlaceFormData, type ResultField } from './PlaceFormModal.helpers'
 import { getApiErrorMessage } from '../../utils/apiError'
-import { sourceLabelFor } from '../../utils/placeSource'
+import { offersGoogleRetry, selectGoogleHoldsSlot, sourceLabelFor } from '../../utils/placeSource'
 import { useLocationBias } from '../../hooks/useLocationBias'
 import { BookingCostsSection } from './BookingCostsSection'
 import type { BookingExpenseRequest } from './BookingCostsSection.types'
@@ -196,7 +196,8 @@ function usePlaceFormModal(props: PlaceFormModalProps) {
   const placesSessionRef = useRef(new PlacesSession())
   const toast = useToast()
   const { t, language, locale } = useTranslation()
-  const { hasMapsKey, placesEnrichEnabled } = useAuthStore()
+  const { placesEnrichEnabled } = useAuthStore()
+  const googleAnswers = useAuthStore(selectGoogleHoldsSlot)
   const can = useCanDo()
   const timeFormat = useSettingsStore((s) => s.settings.time_format) || '24h'
   const tripObj = useTripStore((s) => s.trip)
@@ -396,13 +397,16 @@ function usePlaceFormModal(props: PlaceFormModalProps) {
     setForm(prev => ({ ...prev, [field]: value }))
   }
 
-  const handleMapsSearch = async () => {
-    if (!mapsSearch.trim()) return
+  const handleMapsSearch = async (provider?: 'google') => {
+    // The retry sends the query the list came from, not the field: the list
+    // stays on screen while the field is edited or cleared, and the line under
+    // it promises the same query.
+    const trimmed = provider ? (searchMetaRef.current?.query ?? '') : mapsSearch.trim()
+    if (!trimmed) return
     setIsSearchingMaps(true)
     try {
       // A pasted Google Maps or Amap link resolves server-side into a place
-      const trimmed = mapsSearch.trim()
-      if (isMapUrl(trimmed)) {
+      if (!provider && isMapUrl(trimmed)) {
         const resolved = await mapsApi.resolveUrl(trimmed)
         if (resolved.lat && resolved.lng) {
           setForm(prev => ({
@@ -419,8 +423,8 @@ function usePlaceFormModal(props: PlaceFormModalProps) {
           return
         }
       }
-      const result = await mapsApi.search(mapsSearch, language, locationBiasPoint)
-      searchMetaRef.current = { query: mapsSearch.trim(), source: result.source || 'unknown' }
+      const result = await mapsApi.search(trimmed, language, locationBiasPoint, provider)
+      searchMetaRef.current = { query: trimmed, source: result.source || 'unknown' }
       setMapsResults(result.places || [])
       setSearchSource(result.source || '')
     } catch (err: unknown) {
@@ -760,7 +764,7 @@ function usePlaceFormModal(props: PlaceFormModalProps) {
     language,
     locale,
     timeFormat,
-    hasMapsKey,
+    googleAnswers,
     placesEnrichEnabled,
     can,
     tripObj,
@@ -838,7 +842,7 @@ export default function PlaceFormModal(props: PlaceFormModalProps) {
     toast,
     t,
     language,
-    hasMapsKey,
+    googleAnswers,
     placesEnrichEnabled,
     can,
     tripObj,
@@ -1001,6 +1005,22 @@ export default function PlaceFormModal(props: PlaceFormModalProps) {
                 </button>
               ))}
             </div>
+          )}
+          {/* The index answers first and Google only when it finds nothing, so a
+              list with the wrong place on it never reaches Google by itself. One
+              quiet line under the list sends the same query there, on an instance
+              where Google holds the key slot and for a list Google did not
+              already produce. */}
+          {mapsResults.length > 0 && offersGoogleRetry(searchSource, googleAnswers) && (
+            <button
+              type="button"
+              onClick={() => handleMapsSearch('google')}
+              disabled={isSearchingMaps}
+              className="mt-1.5 inline-flex items-center gap-1 text-caption text-content-faint hover:text-content transition-colors disabled:opacity-50"
+            >
+              <RotateCcw size={11} strokeWidth={2} aria-hidden="true" />
+              {t('places.searchGoogleInstead')}
+            </button>
           )}
         </div>
 

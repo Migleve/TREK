@@ -10,7 +10,15 @@ import {
   type RoadtripPlanRequest,
   type RoadtripCorridorRequest,
 } from '@trek/shared';
-import { corridorTiles, projectOntoRoute, simplifyLine } from '@trek/shared/roadtrip';
+import {
+  corridorTiles,
+  drivenPieces,
+  inRiddenRange,
+  projectOntoRoute,
+  rideGaps,
+  riddenRanges,
+  simplifyLine,
+} from '@trek/shared/roadtrip';
 import { answeringRefusals } from './roadtrip-mcp.helpers';
 
 import { z } from 'zod';
@@ -28,7 +36,7 @@ export class RoadtripPlanningMcp {
   @Tool({
     name: 'get_roadtrip_context',
     description:
-      'Read the saved roadtrip days, visits, pinned times, end times (when the drive leaves a visit), stays, stop types, fill levels, travel modes, via points, followed tracks and manual day endings. Includes the shared driving preferences for this trip. No routing request and no browser needed. Coordinates missing from a visit prevent it from being routed. Use calculate_roadtrip to get the derived day layout. Edit visits with the existing place and assignment tools; change their saved order with reorder_day_assignments. Settings, visits and manual boundaries all belong to the shared trip.',
+      'Read the saved roadtrip days, visits, pinned times, end times (when the drive leaves a visit), stays, stop types, fill levels, travel modes, via points, followed tracks, manual day endings and the carrier bookings (flight, train, ferry, cruise, bus) that seam the drive at their terminals, plus the hire cars whose pick-up and return desks stand on it. Includes the shared driving preferences for this trip. No routing request and no browser needed. Coordinates missing from a visit prevent it from being routed. Use calculate_roadtrip to get the derived day layout. Edit visits with the existing place and assignment tools; change their saved order with reorder_day_assignments. Settings, visits and manual boundaries all belong to the shared trip.',
     inputSchema: { tripId: z.number().int().positive() },
     annotations: TOOL_ANNOTATIONS_READONLY,
     access: { group: 'trips', mode: 'read' },
@@ -41,7 +49,7 @@ export class RoadtripPlanningMcp {
   @Tool({
     name: 'calculate_roadtrip',
     description:
-      'Calculate a saved trip without an open browser, using the same daily scheduling and vehicle-range rules as the planner. Returns derived days, arrivals, departures, driving limits, fuel warnings, automatic pauses and routing failures. Fixed visit times retain priority. The end time of a visit is when the drive leaves it, in place of its stay; reaching the visit after it is reported as a missedLeave warning. No accommodation or place is created. Optional settings are a read-only preview, not saved. Distances are metres, durations seconds, dwell times minutes. A failed leg or conflicting window means the output is incomplete: never present its totals as a complete route. Up to 150 legs; requests are paced for public routing servers and can take time. Existing place/assignment tools edit stops, stays and ordering, update_roadtrip_settings saves preferences, set_assignment_end_day and set_day_boundary set exceptions. Recalculate after changes. Plugin profiles follow installed route-provider permissions.',
+      'Calculate a saved trip without an open browser, using the same daily scheduling and vehicle-range rules as the planner. Returns derived days, arrivals, departures, driving limits, fuel warnings, automatic pauses and routing failures. A flight, train, ferry, cruise or bus booking with located terminals is a seam: its terminals appear as stops carrying `carrier` (role departure or arrival), the road ends at the departure terminal and resumes at the arrival one, and the leg between them is the ride, in the mode of the booking type, with its timetable minutes and no distance. A hire car booking with a located pick-up desk puts that desk on the road as a stop carrying `carrier` with role pickup, and its return desk with role return when the booking names a return day and place; the road runs through both. Fixed visit times retain priority. The end time of a visit is when the drive leaves it, in place of its stay; reaching the visit after it is reported as a missedLeave warning. No accommodation or place is created. Optional settings are a read-only preview, not saved. Distances are metres, durations seconds, dwell times minutes. A failed leg or conflicting window means the output is incomplete: never present its totals as a complete route. Up to 150 legs; requests are paced for public routing servers and can take time. Existing place/assignment tools edit stops, stays and ordering, update_roadtrip_settings saves preferences, set_assignment_end_day and set_day_boundary set exceptions. Recalculate after changes. Plugin profiles follow installed route-provider permissions.',
     inputSchema: roadtripPlanRequestSchema.shape,
     annotations: TOOL_ANNOTATIONS_READONLY,
     access: { group: 'trips', mode: 'read' },
@@ -84,7 +92,7 @@ export class RoadtripPlanningMcp {
   @Tool({
     name: 'search_roadtrip_corridor',
     description:
-      'Search for fuel, charging, rest areas, campsites, food, sights or accommodation along a calculated roadtrip day, without a browser. Uses the routed road, not a straight line. Returns distance along the route and distance from it. Search rectangles are paged in batches of six; continue with nextOffset until null for full coverage. Optional name, socket family and minimum power filter the matches; missing charging details mean unknown. Does not add stops. Add a chosen place and assign it to the appropriate stored day, preserving any via anchors. Routing failures refuse the corridor search rather than searching an invented line.',
+      'Search for fuel, charging, rest areas, campsites, food, sights or accommodation along a calculated roadtrip day, without a browser. Uses the routed road, not a straight line, and leaves out the ride between the two terminals of a flight, train, ferry, cruise or bus booking: no rectangle is searched under it and nothing found there is a hit. Returns distance along the route and distance from it. Search rectangles are paged in batches of six; continue with nextOffset until null for full coverage. Optional name, socket family and minimum power filter the matches; missing charging details mean unknown. Does not add stops. Add a chosen place and assign it to the appropriate stored day, preserving any via anchors. Routing failures refuse the corridor search rather than searching an invented line.',
     inputSchema: roadtripCorridorRequestSchema.shape,
     annotations: TOOL_ANNOTATIONS_READONLY,
     access: { group: 'trips', mode: 'read' },
@@ -105,7 +113,10 @@ export class RoadtripPlanningMcp {
         day.geometry.map(([lat, lng]) => ({ lat, lng })),
         Math.max(1, input.widthKm / 3),
       );
-      const tiles = corridorTiles(line, input.widthKm);
+      // The line jumps straight from a departure terminal to its arrival, and the car is
+      // not on that stretch: nothing under it is tiled or on the way (#2428).
+      const ridden = riddenRanges(line, rideGaps(day.stops));
+      const tiles = drivenPieces(line, ridden).flatMap((piece) => corridorTiles(piece, input.widthKm));
       const hits = new Map<
         string,
         { poi: Awaited<ReturnType<RoadtripSearchService['search']>>['pois'][number]; alongKm: number; distanceKm: number }
@@ -123,7 +134,8 @@ export class RoadtripPlanningMcp {
           if (found.truncated || found.clamped) truncatedAreas++;
           for (const poi of found.pois) {
             const projection = projectOntoRoute(poi, line);
-            if (!projection || projection.offRouteKm > input.widthKm) continue;
+            if (!projection || projection.offRouteKm > input.widthKm || inRiddenRange(ridden, projection.alongKm))
+              continue;
             if (
               (input.fromKm != null && projection.alongKm < input.fromKm) ||
               (input.toKm != null && projection.alongKm > input.toKm)

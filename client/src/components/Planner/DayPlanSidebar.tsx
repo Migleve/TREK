@@ -188,6 +188,9 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
   const tripActions = useRef(useTripStore.getState()).current
   const can = useCanDo()
   const canEditDays = can('day_edit', trip)
+  // Editing or deleting the place itself is a place right; taking it off the
+  // day stays a day right (#2446).
+  const canEditPlaces = can('place_edit', trip)
   // The calendar subscription hands out a link that reads the trip without an
   // account, so it sits behind the same permission as the public share link.
   const canManageShare = can('share_manage', trip)
@@ -1148,6 +1151,7 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
     tripActions,
     can,
     canEditDays,
+    canEditPlaces,
     canManageShare,
     noteUi,
     setNoteUi,
@@ -1348,6 +1352,7 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
     tripActions,
     can,
     canEditDays,
+    canEditPlaces,
     canManageShare,
     noteUi,
     setNoteUi,
@@ -1525,7 +1530,11 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
   }
 
   return (
-    <div ref={setPanel} data-touch-drag={dragDisabled ? undefined : ''} style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative', fontFamily: "var(--font-system)" }}>
+    // Sized as a flex child as well as by height: the desktop panel puts the Days / Road
+    // trip switch above this, and at height 100% alone the list ran the switch's height
+    // past the panel's clipped edge, so the last day could never be scrolled into view.
+    // Where nothing sits above it (the mobile shell), the height still fills the panel.
+    <div ref={setPanel} data-touch-drag={dragDisabled ? undefined : ''} style={{ display: 'flex', flexDirection: 'column', flex: '1 1 0%', minHeight: 0, height: '100%', position: 'relative', fontFamily: "var(--font-system)" }}>
       {/* Toolbar */}
       <DayPlanSidebarToolbar
         tripId={tripId}
@@ -2093,13 +2102,13 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
                               // does not exist here.
                               const navTargets = getNavigationTargets(place)
                               ctxMenu.open(e, [
-                                canEditDays && onEditPlace && { label: t('common.edit'), icon: Pencil, onClick: () => onEditPlace(place, assignment.id) },
+                                canEditPlaces && onEditPlace && { label: t('common.edit'), icon: Pencil, onClick: () => onEditPlace(place, assignment.id) },
                                 canEditDays && onRemoveAssignment && { label: t('planner.removeFromDay'), icon: Trash2, onClick: () => onRemoveAssignment(day.id, assignment.id) },
                                 safeHttpUrl(place.website) && { label: t('inspector.website'), icon: ExternalLink, onClick: () => window.open(safeHttpUrl(place.website)!, '_blank', 'noopener,noreferrer') },
                                 ...navTargets.map(target => ({ label: target.label, icon: Navigation, onClick: () => openNavigationTarget(target) })),
                                 collectionsEnabled && { label: t('inspector.saveToCollection'), icon: Bookmark, onClick: () => useSaveToCollectionStore.getState().open(placeToSaveTarget(place)) },
                                 { divider: true },
-                                canEditDays && onDeletePlace && { label: t('common.delete'), icon: Trash2, danger: true, onClick: () => onDeletePlace(place.id) },
+                                canEditPlaces && onDeletePlace && { label: t('common.delete'), icon: Trash2, danger: true, onClick: () => onDeletePlace(place.id) },
                               ])
                             }}
                             onMouseEnter={e => {

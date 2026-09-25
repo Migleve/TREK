@@ -1,11 +1,13 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useParams } from 'react-router'
 import { Plane, Train, Car, Ship, Bus, Sailboat, Bike, CarTaxiFront, Route, TramFront, Paperclip, FileText, X, ExternalLink, Link2, Plus, Trash2, ChevronUp, ChevronDown } from 'lucide-react'
 import Modal from '../shared/Modal'
 import CustomSelect from '../shared/CustomSelect'
+import { BookingCodeInput } from '../shared/BookingCode'
 import CustomTimePicker from '../shared/CustomTimePicker'
 import AirportSelect, { type Airport } from './AirportSelect'
 import LocationSelect, { type LocationPoint } from './LocationSelect'
+import { toLocationPicks } from './locationPicks'
 import { useTranslation } from '../../i18n'
 import { useToast } from '../shared/Toast'
 import { useTripStore } from '../../store/tripStore'
@@ -14,7 +16,7 @@ import { formatDate, splitReservationDateTime, resolveDayId } from '../../utils/
 import { openFile } from '../../utils/fileDownload'
 import apiClient from '../../api/client'
 import type { Day, Place, Accommodation, Reservation, ReservationEndpoint, TripFile, BudgetItem, AssignmentsMap } from '../../types'
-import { parseReservationMetadata, orderedEndpoints } from '../../utils/flightLegs'
+import { parseReservationMetadata, orderedEndpoints, stripAirportCode } from '../../utils/flightLegs'
 import { BookingCostsSection } from './BookingCostsSection'
 import { TravelerPicker } from './TravelerPicker'
 import type { TripMember } from '../Budget/BudgetPanelMemberChips'
@@ -53,14 +55,6 @@ function endpointFromLocation(l: LocationPoint, role: 'from' | 'to' | 'stop', se
     local_date: date,
     local_time: time,
   }
-}
-
-// "Paris Charles de Gaulle (CDG)" → "Paris Charles de Gaulle". Done as a trim
-// plus an anchored test instead of /\s*\([A-Z]{3}\)\s*$/, because the leading
-// \s* backtracks over every space in a long name for a quadratic worst case.
-function stripAirportCode(name: string): string {
-  const trimmed = name.trimEnd()
-  return /\([A-Z]{3}\)$/.test(trimmed) ? trimmed.slice(0, -5).trimEnd() : name
 }
 
 function airportFromEndpoint(e: ReservationEndpoint | undefined): Airport | null {
@@ -194,6 +188,8 @@ interface TransportModalProps {
 export function TransportModal({ isOpen, onClose, onSave, reservation, days, selectedDayId, files = [], onFileUpload, onFileDelete, onOpenExpense, prefill = null, places = [], assignments = {}, accommodations = [], initialAutomated = false, transitPrefill = null, tripHasDates = true, tripMembers = [] }: TransportModalProps) {
   const { t, locale } = useTranslation()
   const toast = useToast()
+  // The trip's places, offered by every location field of the manual tab (#2468).
+  const locationPicks = useMemo(() => toLocationPicks(places), [places])
   const isBudgetEnabled = useAddonStore(s => s.isEnabled('budget'))
   const budgetItems = useTripStore(s => s.budgetItems)
   const deleteBudgetItem = useTripStore(s => s.deleteBudgetItem)
@@ -903,7 +899,7 @@ export function TransportModal({ isOpen, onClose, onSave, reservation, days, sel
                           {writesFlightLegs && (
                             <div>
                               <label className={labelClass}>{t('reservations.confirmationCode')}</label>
-                              <input type="text" value={wp.confirmation_number} onChange={e => updateWp({ confirmation_number: e.target.value })}
+                              <BookingCodeInput value={wp.confirmation_number} onChange={e => updateWp({ confirmation_number: e.target.value })}
                                 placeholder={t('reservations.confirmationPlaceholder')} className={inputClass} />
                             </div>
                           )}
@@ -936,7 +932,7 @@ export function TransportModal({ isOpen, onClose, onSave, reservation, days, sel
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span className="text-content-faint" style={{ fontSize: 'calc(10px * var(--fs-scale-caption, 1))', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', flexShrink: 0 }}>{roleLabel}</span>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <LocationSelect value={wp.location} onChange={l => updateWp({ location: l || null })} />
+                        <LocationSelect value={wp.location} onChange={l => updateWp({ location: l || null })} places={locationPicks} />
                       </div>
                       {!isFirst && !isLast && (
                         <button type="button" onClick={() => setTrainWaypoints(prev => prev.filter((_, j) => j !== i))} aria-label={t('common.delete')} className="text-content-faint" style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', padding: 4, flexShrink: 0 }}>
@@ -984,7 +980,7 @@ export function TransportModal({ isOpen, onClose, onSave, reservation, days, sel
                           {writesTrainLegs && (
                             <div>
                               <label className={labelClass}>{t('reservations.confirmationCode')}</label>
-                              <input type="text" value={wp.confirmation_number} onChange={e => updateWp({ confirmation_number: e.target.value })}
+                              <BookingCodeInput value={wp.confirmation_number} onChange={e => updateWp({ confirmation_number: e.target.value })}
                                 placeholder={t('reservations.confirmationPlaceholder')} className={inputClass} />
                             </div>
                           )}
@@ -1008,11 +1004,11 @@ export function TransportModal({ isOpen, onClose, onSave, reservation, days, sel
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className={labelClass}>{t('reservations.meta.from')}</label>
-                <LocationSelect value={fromPick.location || null} onChange={l => setFromPick({ location: l || undefined })} />
+                <LocationSelect value={fromPick.location || null} onChange={l => setFromPick({ location: l || undefined })} places={locationPicks} />
               </div>
               <div>
                 <label className={labelClass}>{t('reservations.meta.to')}</label>
-                <LocationSelect value={toPick.location || null} onChange={l => setToPick({ location: l || undefined })} />
+                <LocationSelect value={toPick.location || null} onChange={l => setToPick({ location: l || undefined })} places={locationPicks} />
               </div>
             </div>
 
@@ -1056,6 +1052,7 @@ export function TransportModal({ isOpen, onClose, onSave, reservation, days, sel
                       <LocationSelect
                         value={stop.location}
                         onChange={l => setCarStops(prev => prev.map((s, j) => (j === i ? { ...s, location: l || null } : s)))}
+                        places={locationPicks}
                       />
                     </div>
                     <div style={{ width: 110, flexShrink: 0 }}>
@@ -1119,7 +1116,7 @@ export function TransportModal({ isOpen, onClose, onSave, reservation, days, sel
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className={labelClass}>{t('reservations.confirmationCode')}</label>
-            <input type="text" value={form.confirmation_number} onChange={e => set('confirmation_number', e.target.value)}
+            <BookingCodeInput value={form.confirmation_number} onChange={e => set('confirmation_number', e.target.value)}
               placeholder={t('reservations.confirmationPlaceholder')} className={inputClass} />
           </div>
           <div>

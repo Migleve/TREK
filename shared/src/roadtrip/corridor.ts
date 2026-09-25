@@ -26,6 +26,22 @@ export function haversineKm(a: LatLng, b: LatLng): number {
   return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
+/**
+ * Beyond this straight-line distance a leg is not a drive anyone makes between two stops:
+ * it is a booking's terminal that landed next to a local stop or a hotel, and the road
+ * router answers such a pair with NoRoute (#2133).
+ *
+ * Only ever applied to a leg that touches a booking's terminal. Two real places 2000 km
+ * apart are a long drive somebody planned; an airport 2000 km from the stop before it
+ * never is. The day plan and the road trip both read it from here.
+ */
+export const MAX_DRIVE_KM = 2000;
+
+/** Whether two points are close enough to be joined by a road leg at all. */
+export function withinDriveRange(a: LatLng, b: LatLng): boolean {
+  return haversineKm(a, b) <= MAX_DRIVE_KM;
+}
+
 export function distanceToSegmentKm(p: LatLng, a: LatLng, b: LatLng): number {
   return projectOnSegment(p, a, b).distanceKm;
 }
@@ -59,22 +75,50 @@ export interface CorridorHit {
   alongKm: number;
 }
 
-export function projectOntoRoute(p: LatLng, line: LatLng[]): CorridorHit | null {
+/**
+ * Where `p` meets the line: how far off it is and how far into the drive the closest
+ * point comes.
+ *
+ * `within` keeps the answer to one stretch of the drive, in km from its start. A road
+ * driven twice in a day, out of a hotel and back past it later, is the same line twice
+ * over, and the answer for the whole line is always the first pass; a caller that needs
+ * the second one asks for the stretch it lies in. No part of that stretch on the line
+ * means no answer.
+ */
+export function projectOntoRoute(
+  p: LatLng,
+  line: LatLng[],
+  within?: { fromKm: number; toKm: number },
+): CorridorHit | null {
   if (line.length < 2) return null;
   let best = Number.POSITIVE_INFINITY;
   let bestAlong = 0;
   let travelled = 0;
+  let measured = false;
   for (let i = 0; i < line.length - 1; i++) {
     const a = line[i]!;
     const b = line[i + 1]!;
     const segment = haversineKm(a, b);
-    const { distanceKm: d, t } = projectOnSegment(p, a, b);
+    const start = travelled;
+    travelled += segment;
+    if (within && (travelled < within.fromKm || start > within.toKm)) continue;
+    measured = true;
+    let { distanceKm: d, t } = projectOnSegment(p, a, b);
+    if (within && segment > 0) {
+      // A segment the stretch starts or ends inside counts only up to that edge.
+      const lo = Math.max(0, (within.fromKm - start) / segment);
+      const hi = Math.min(1, (within.toKm - start) / segment);
+      if (t < lo || t > hi) {
+        t = t < lo ? lo : hi;
+        d = haversineKm(p, { lat: a.lat + t * (b.lat - a.lat), lng: a.lng + t * (b.lng - a.lng) });
+      }
+    }
     if (d < best) {
       best = d;
-      bestAlong = travelled + t * segment;
+      bestAlong = start + t * segment;
     }
-    travelled += segment;
   }
+  if (within && !measured) return null;
   return { offRouteKm: best, alongKm: bestAlong };
 }
 

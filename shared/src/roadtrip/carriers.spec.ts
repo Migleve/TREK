@@ -1,12 +1,18 @@
 /**
- * ROADTRIP-CARRIERS-001..021: a booking the traveller rides becomes a seam in the drive,
+ * ROADTRIP-CARRIERS-001..035: a booking the traveller rides becomes a seam in the drive,
  * and a hire car puts its desks on it.
  *
  * The road ends at the terminal the ride leaves from and starts again at the one it
  * lands at (#2428). Pinned here: which bookings count, where their terminals are seated
  * among the day's stops, what the ride between them is worth to the chain, that
  * nothing about a terminal reads as a stored stop, and that a hire car's pick-up and
- * return are points the road runs through rather than a seam in it.
+ * return are points the road runs through rather than a seam in it. From 022 on: a ride
+ * on no day is named rather than dropped, and a ride within one day is seated where it
+ * adds the least road, as far as the clock leaves a choice (#2461). From 028 on: a ride
+ * that lands on a later day is not seated there by the slot seeded on the day it left.
+ * From 030 on: a booked night at a day's edge takes no via, and a terminal says which
+ * edge of the day it holds. From 032 on: tonight's stay at the far end of a ride within
+ * one day waits behind its landing.
  */
 import { assembleRoadtrip } from './assemble';
 import {
@@ -17,12 +23,20 @@ import {
   carrierReservationIds,
   carrierSeam,
   carriesTheCar,
+  closesTheDay,
   isCarrierMode,
   isPickupStop,
+  isUndatedRide,
+  opensTheDay,
+  rideSeatAfter,
+  sameDayRide,
   seatCarrierStops,
   terminalAssignmentId,
+  undatedRides,
   viasLeaving,
+  viasOnLeg,
   type CarrierBooking,
+  type SeatItem,
 } from './carriers';
 import { planDayWindow } from './dayWindow';
 import type { PlanDay, RoadtripStop, RoutedLeg } from './planning-types';
@@ -616,5 +630,374 @@ describe('the ride in the drive', () => {
       ['14:00', '14:00'],
     ]);
     expect(routes.days.some((d) => d.spills?.length)).toBe(false);
+  });
+});
+
+/**
+ * The crossing from the report behind #2461: Amsterdam and Newcastle on one day, neither
+ * with a clock, and the ferry from IJmuiden to the Port of Tyne between them.
+ */
+const AMSTERDAM = { lat: 52.3731, lng: 4.8926 };
+const NEWCASTLE = { lat: 54.9783, lng: -1.6178 };
+const IJMUIDEN = { lat: 52.4581, lng: 4.5879 };
+const PORT_OF_TYNE = { lat: 54.9925, lng: -1.4522 };
+
+const ferry = (over: Partial<CarrierBooking> = {}): CarrierBooking => ({
+  id: 69,
+  type: 'ferry',
+  title: 'IJmuiden to Newcastle',
+  day_id: 1,
+  end_day_id: 1,
+  reservation_time: '2026-10-06T17:30',
+  reservation_end_time: '2026-10-06T23:00',
+  endpoints: [
+    { role: 'from', sequence: 0, name: 'IJmuiden', code: null, ...IJMUIDEN },
+    { role: 'to', sequence: 1, name: 'Port of Tyne', code: null, ...PORT_OF_TYNE },
+  ],
+  ...over,
+});
+
+const crossingDay = (newcastleAt: string | null = null): RoadtripStop[] => [
+  stop({ ownerIndex: 0, name: 'Amsterdam', ...AMSTERDAM }),
+  stop({ ownerIndex: 1, name: 'Newcastle', ...NEWCASTLE, time: newcastleAt }),
+];
+
+const order = (stops: RoadtripStop[]): string[] => stops.map((s) => s.carrier?.role ?? s.name);
+
+describe('a ride on no day (#2461)', () => {
+  it('ROADTRIP-CARRIERS-022: a located ride without a day is named, one on a day or without both terminals is not', () => {
+    const undated = ferry({ id: 71, day_id: null, end_day_id: null });
+    expect(isUndatedRide(undated)).toBe(true);
+    // No seam either: that is the silence the name is for.
+    expect(carrierSeam(undated)).toBeNull();
+    expect(isUndatedRide(ferry())).toBe(false);
+    expect(isUndatedRide(ferry({ day_id: null, endpoints: [] }))).toBe(false);
+    expect(isUndatedRide(ferry({ day_id: null, endpoints: [ferry().endpoints![0]!] }))).toBe(false);
+    // A hire car is no ride, and a leg that names its day puts the booking on that day.
+    expect(isUndatedRide(ferry({ day_id: null, type: 'car' }))).toBe(false);
+    const legs = JSON.stringify({ legs: [{ dep_day_id: 2, dep_time: '10:00', arr_day_id: 2, arr_time: '11:00' }] });
+    expect(isUndatedRide(flight({ day_id: null, metadata: legs }))).toBe(false);
+    // Listed by id, whatever order the bookings come in.
+    const listed = undatedRides([ferry({ id: 9, day_id: null }), ferry(), ferry({ id: 3, day_id: null })]);
+    expect(listed.map((b) => b.id)).toEqual([3, 9]);
+  });
+});
+
+describe('a ride within one day, seated by where it goes (#2461)', () => {
+  it('ROADTRIP-CARRIERS-023: only a ride that lands on the day it left, located at both ends and without a change, has a seat of its own', () => {
+    expect(sameDayRide(ferry())).toEqual({ minutes: 17 * 60 + 30, from: IJMUIDEN, to: PORT_OF_TYNE });
+    expect(sameDayRide(ferry({ reservation_time: null }))!.minutes).toBeNull();
+    expect(sameDayRide(ferry({ end_day_id: 2 }))).toBeNull();
+    expect(sameDayRide(ferry({ endpoints: [] }))).toBeNull();
+    expect(sameDayRide(ferry({ type: 'car' }))).toBeNull();
+    const stopover = flight({
+      metadata: JSON.stringify({
+        legs: [
+          { dep_day_id: 1, dep_time: '08:00', arr_day_id: 1, arr_time: '09:00' },
+          { dep_day_id: 1, dep_time: '10:00', arr_day_id: 1, arr_time: '11:00' },
+        ],
+      }),
+    });
+    expect(carrierSeam(stopover)!.stopover).toBe(true);
+    expect(carrierSeam(flight())!.stopover).toBe(false);
+    expect(sameDayRide(stopover)).toBeNull();
+  });
+
+  it('ROADTRIP-CARRIERS-024: a ferry between two untimed stops on its two shores sits between them, not at the end of the day', () => {
+    const seated = seatCarrierStops(1, crossingDay(), [0, 1], [carrierSeam(ferry())!]);
+    expect(order(seated)).toEqual(['Amsterdam', 'departure', 'arrival', 'Newcastle']);
+    // The terminals still stand for the stop that follows them, the way they always have.
+    expect(seated[1]!.ownerIndex).toBe(1);
+    // Newcastle alone on the day: the crossing opens it, and the drive starts at the far pier.
+    const newcastleOnly = [stop({ ownerIndex: 0, name: 'Newcastle', ...NEWCASTLE })];
+    expect(order(seatCarrierStops(1, newcastleOnly, [0], [carrierSeam(ferry())!]))).toEqual([
+      'departure',
+      'arrival',
+      'Newcastle',
+    ]);
+    // Without a clock it goes there too: nothing timed binds it from above.
+    const unclocked = carrierSeam(ferry({ reservation_time: null, reservation_end_time: null }))!;
+    expect(order(seatCarrierStops(1, crossingDay(), [0, 1], [unclocked]))).toEqual([
+      'Amsterdam',
+      'departure',
+      'arrival',
+      'Newcastle',
+    ]);
+  });
+
+  it('ROADTRIP-CARRIERS-025: a clock still binds: a stop timed before the departure keeps the ride behind it, and a dragged slot wins', () => {
+    const timed = seatCarrierStops(1, crossingDay('10:00'), [0, 1], [carrierSeam(ferry())!]);
+    expect(order(timed)).toEqual(['Amsterdam', 'Newcastle', 'departure', 'arrival']);
+    const dragged = carrierSeam(ferry({ day_positions: { '1': 5 } }))!;
+    expect(order(seatCarrierStops(1, crossingDay(), [0, 1], [dragged]))).toEqual([
+      'Amsterdam',
+      'Newcastle',
+      'departure',
+      'arrival',
+    ]);
+  });
+
+  it('ROADTRIP-CARRIERS-026: between the clocks, the seat that adds the fewest kilometres, the start of the day among them', () => {
+    const ride = { minutes: 17 * 60 + 30, from: IJMUIDEN, to: PORT_OF_TYNE };
+    const item = (key: number, point: SeatItem['point']): SeatItem => ({ key, minutes: null, point });
+    expect(rideSeatAfter([item(0, AMSTERDAM), item(1, NEWCASTLE)], ride)).toBe(0);
+    // Newcastle alone: the ride opens the day and lands next door. Amsterdam alone: the
+    // clock's seat at the end of the day is already the short drive to the pier.
+    expect(rideSeatAfter([item(0, NEWCASTLE)], ride)).toBe(-Infinity);
+    expect(rideSeatAfter([item(0, AMSTERDAM)], ride)).toBeNull();
+    // An item without a point is passed over: the kilometres are measured between the
+    // located ones around it, and of two equal seats the earlier one is taken.
+    expect(rideSeatAfter([item(0, AMSTERDAM), item(1, null), item(2, NEWCASTLE)], ride)).toBe(0);
+    // Keys, not the order the items come in.
+    expect(rideSeatAfter([item(7, NEWCASTLE), item(3, AMSTERDAM)], ride)).toBe(3);
+    // Nothing located, or no choice the clock leaves open: the clock's own seat.
+    expect(rideSeatAfter([item(0, null), item(1, null)], ride)).toBeNull();
+    expect(rideSeatAfter([{ key: 0, minutes: 10 * 60, point: AMSTERDAM }], ride)).toBeNull();
+    expect(rideSeatAfter([], ride)).toBeNull();
+  });
+
+  it('ROADTRIP-CARRIERS-027: the first item timed after the departure is a wall, and a seat has to beat the clock by a margin', () => {
+    // A ride north along one meridian. By the kilometres it belongs behind the last stop,
+    // where it starts next door, but the 20:00 stop comes after a 17:30 departure and
+    // holds it in front: of the seats left, the start of the day is the shorter drive.
+    const north = { minutes: 17 * 60 + 30, from: { lat: 10.1, lng: 0 }, to: { lat: 20, lng: 0 } };
+    const walled: SeatItem[] = [
+      { key: 0, minutes: null, point: { lat: 0, lng: 0 } },
+      { key: 1, minutes: 20 * 60, point: { lat: 1, lng: 0 } },
+      { key: 2, minutes: null, point: { lat: 10, lng: 0 } },
+    ];
+    expect(rideSeatAfter(walled, north)).toBe(-Infinity);
+    // Without the wall the ride closes the day, which is where the clock puts it anyway.
+    const unwalled = walled.map((w) => ({ ...w, minutes: null }));
+    expect(rideSeatAfter(unwalled, north)).toBeNull();
+    // Two seats a couple of kilometres apart on a crossing of six hundred: straight lines
+    // cannot tell them apart, so the clock's seat stands. The flight of 008 shows the same
+    // in the drive, where Stop 2 stays behind the ride.
+    const close: SeatItem[] = [
+      { key: 0, minutes: 10 * 60, point: { lat: 50.1, lng: 10 } },
+      { key: 1, minutes: null, point: { lat: 50.2, lng: 10 } },
+      { key: 2, minutes: 17 * 60, point: { lat: 50.3, lng: 10 } },
+    ];
+    const muc = { minutes: 13 * 60 + 20, from: { lat: 48.35, lng: 11.78 }, to: { lat: 53.63, lng: 9.99 } };
+    expect(rideSeatAfter(close, muc)).toBeNull();
+  });
+});
+
+describe('a ride that lands on a later day (#2461)', () => {
+  const overnight = (over: Partial<CarrierBooking> = {}): CarrierBooking =>
+    ferry({ end_day_id: 2, reservation_end_time: '2026-10-07T09:00', ...over });
+  const newcastleOnDay2 = [stop({ ownerIndex: 0, ownerDayId: 2, name: 'Newcastle', ...NEWCASTLE })];
+
+  it('ROADTRIP-CARRIERS-028: the booking’s own slot seats its departure only, and the arrival opens the day it lands on', () => {
+    // Seeded on the evening of the crossing behind both of its stops, the slot sat behind
+    // the morning's stop across the water too, and the drive ran from it back to the pier.
+    const seeded = carrierSeam(overnight({ day_plan_position: 1.5 }))!;
+    expect(seeded.departure.position).toBe(1.5);
+    expect(seeded.arrival!.position).toBeNull();
+    expect(order(seatCarrierStops(2, newcastleOnDay2, [0], [seeded]))).toEqual(['arrival', 'Newcastle']);
+    // A slot somebody gave it on the day it lands still wins, and so does a leg's own.
+    const dragged = carrierSeam(overnight({ day_plan_position: 1.5, day_positions: { '2': 0.5 } }))!;
+    expect(dragged.arrival!.position).toBe(0.5);
+    expect(order(seatCarrierStops(2, newcastleOnDay2, [0], [dragged]))).toEqual(['Newcastle', 'arrival']);
+    // On the day it leaves, and for a ride within one day, nothing changes.
+    expect(carrierSeam(ferry({ day_plan_position: 1.5 }))!.arrival!.position).toBe(1.5);
+  });
+
+  it('ROADTRIP-CARRIERS-029: a hire car handed back on a later day keeps reading the booking’s slot', () => {
+    const car = carrierSeam({
+      id: 5,
+      type: 'car',
+      title: 'Hire car',
+      day_id: 1,
+      end_day_id: 2,
+      reservation_time: '10:00',
+      reservation_end_time: '10:00',
+      day_plan_position: 1.5,
+      endpoints: [
+        { role: 'from', sequence: 0, name: 'Desk A', code: null, lat: 50, lng: 10 },
+        { role: 'to', sequence: 1, name: 'Desk B', code: null, lat: 51, lng: 10 },
+      ],
+    })!;
+    expect(car.arrival!.position).toBe(1.5);
+  });
+});
+
+describe('a booked night at the edge of a day', () => {
+  const hotel = (phase: 'morning' | 'evening', ownerIndex: number) =>
+    stop({
+      ownerIndex,
+      bookend: {
+        phase,
+        accommodationId: 5,
+        reservationId: null,
+        checkingOut: false,
+        checkingIn: false,
+        checkOut: null,
+      },
+    });
+  const vias = [
+    { day_id: 1, after_order_index: 0, sequence: 0, lat: 1, lng: 1 },
+    { day_id: 1, after_order_index: 1, sequence: 0, lat: 2, lng: 2 },
+  ];
+
+  it('ROADTRIP-CARRIERS-030: no via leaves the hotel, and none bends the drive to tonight’s', () => {
+    // The morning's hotel borrows the first stop's index; the points filed there are
+    // that stop's, for the drive leaving it.
+    expect(viasLeaving(hotel('morning', 0), vias)).toEqual([]);
+    expect(viasOnLeg(hotel('morning', 0), stop({ ownerIndex: 0 }), vias)).toEqual([]);
+    expect(viasOnLeg(stop({ ownerIndex: 0 }), stop({ ownerIndex: 1 }), vias)).toEqual([vias[0]]);
+    // The points behind the day's last stop shape the road into tomorrow, which the drive
+    // to tonight's hotel is not.
+    expect(viasOnLeg(stop({ ownerIndex: 1 }), hotel('evening', 2), vias)).toEqual([]);
+    expect(viasLeaving(stop({ ownerIndex: 1 }), vias)).toEqual([vias[1]]);
+  });
+
+  it('ROADTRIP-CARRIERS-031: a landing or a pick-up opens a day, a departure or a hand-back closes it', () => {
+    expect(['arrival', 'pickup', 'departure', 'return', undefined].map((role) => opensTheDay(role as never))).toEqual([
+      true,
+      true,
+      false,
+      false,
+      false,
+    ]);
+    expect(['arrival', 'pickup', 'departure', 'return', undefined].map((role) => closesTheDay(role as never))).toEqual([
+      false,
+      false,
+      true,
+      true,
+      false,
+    ]);
+  });
+});
+
+/**
+ * The flight day behind the report: the hotel in Munich is booked for the night from 15:00,
+ * and LH 2078 leaves Hamburg at 15:15. The day plan seeded the booking's slot behind the
+ * hotel (0.5), and the hotel's own stop is the only one the day stores.
+ */
+const HAM_AIRPORT = { lat: 53.630402, lng: 9.98823 };
+const MUC_AIRPORT = { lat: 48.353802, lng: 11.7861 };
+const MUNICH_HOTEL = { lat: 48.1403, lng: 11.5732 };
+const SPEICHERSTADT = { lat: 53.5436, lng: 9.9885 };
+const PINAKOTHEK = { lat: 48.1482, lng: 11.57 };
+
+const lh2078 = (over: Partial<CarrierBooking> = {}): CarrierBooking => ({
+  id: 77,
+  type: 'flight',
+  title: 'LH 2078 HAM-MUC',
+  day_id: 1,
+  end_day_id: 1,
+  reservation_time: '2026-11-04T15:15',
+  reservation_end_time: '2026-11-04T17:20',
+  day_plan_position: 0.5,
+  endpoints: [
+    { role: 'from', sequence: 0, name: 'Hamburg (HAM)', code: 'HAM', ...HAM_AIRPORT },
+    { role: 'to', sequence: 1, name: 'Munich (MUC)', code: 'MUC', ...MUC_AIRPORT },
+  ],
+  ...over,
+});
+
+/** Tonight's stay on its check-in day, the way both planners read the booking's own stop. */
+const munichHotel = (ownerIndex: number, over: Partial<RoadtripStop> = {}): RoadtripStop =>
+  stop({
+    ownerIndex,
+    name: 'Munich hotel',
+    ...MUNICH_HOTEL,
+    night: true,
+    checkInTime: '15:00',
+    dwellMinutes: 60,
+    stopType: 'hotel',
+    ...over,
+  });
+const speicherstadt = (ownerIndex: number, time: string | null = null): RoadtripStop =>
+  stop({ ownerIndex, name: 'Speicherstadt', ...SPEICHERSTADT, time });
+
+describe('tonight’s stay at the far end of a ride within one day', () => {
+  it('ROADTRIP-CARRIERS-032: waits behind the landing, whatever its check-in or the booking’s slot says', () => {
+    // Read by its check-in, the hotel sat ahead of the 15:15 departure: the drive went from
+    // the Munich hotel to Hamburg airport, only to fly back to Munich.
+    const seam = carrierSeam(lh2078())!;
+    expect(order(seatCarrierStops(1, [munichHotel(0)], [0], [seam]))).toEqual(['departure', 'arrival', 'Munich hotel']);
+    const unslotted = carrierSeam(lh2078({ day_plan_position: null }))!;
+    expect(order(seatCarrierStops(1, [munichHotel(0)], [0], [unslotted]))).toEqual([
+      'departure',
+      'arrival',
+      'Munich hotel',
+    ]);
+    // The morning in Hamburg stays ahead of the flight, timed or not, whichever of the two
+    // is stored first.
+    expect(order(seatCarrierStops(1, [speicherstadt(0, '10:00'), munichHotel(1)], [0, 1], [seam]))).toEqual([
+      'Speicherstadt',
+      'departure',
+      'arrival',
+      'Munich hotel',
+    ]);
+    const hotelFirst = seatCarrierStops(1, [munichHotel(0), speicherstadt(1)], [0, 1], [unslotted]);
+    expect(order(hotelFirst)).toEqual(['Speicherstadt', 'departure', 'arrival', 'Munich hotel']);
+    // The terminals stand for the stored stop behind the one they follow, the hotel keeps
+    // its own index.
+    expect(hotelFirst.map((s) => s.ownerIndex)).toEqual([1, 2, 2, 0]);
+    // An evening in Munich comes after the hotel.
+    const museum = stop({ ownerIndex: 1, name: 'Pinakothek', ...PINAKOTHEK, time: '19:00' });
+    expect(order(seatCarrierStops(1, [munichHotel(0), museum], [0, 1], [seam]))).toEqual([
+      'departure',
+      'arrival',
+      'Munich hotel',
+      'Pinakothek',
+    ]);
+  });
+
+  it('ROADTRIP-CARRIERS-033: a check-in the ride lands after holds the stay to nothing, one it lands before still does', () => {
+    // Checked in from 15:00 and reached from a landing at 17:20: held as a pin, the hotel
+    // read 15:00 behind the landing and late by the drive from the airport.
+    const [, , afternoon] = seatCarrierStops(1, [munichHotel(0)], [0], [carrierSeam(lh2078())!]);
+    expect(afternoon).toMatchObject({ name: 'Munich hotel', checkInTime: null, night: true, ownerIndex: 0 });
+    const morning = carrierSeam(
+      lh2078({ reservation_time: '2026-11-04T07:00', reservation_end_time: '2026-11-04T08:05' }),
+    )!;
+    const [, , waited] = seatCarrierStops(1, [munichHotel(0)], [0], [morning]);
+    expect(waited).toMatchObject({ name: 'Munich hotel', checkInTime: '15:00' });
+  });
+
+  it('ROADTRIP-CARRIERS-034: a stay nearer the departure, one with a time of its own and a ride landing tomorrow keep the clock’s seat', () => {
+    const seam = carrierSeam(lh2078())!;
+    const hamburgHotel = munichHotel(0, { name: 'Hamburg hotel', ...SPEICHERSTADT });
+    expect(order(seatCarrierStops(1, [hamburgHotel], [0], [seam]))).toEqual(['Hamburg hotel', 'departure', 'arrival']);
+    // A time somebody typed on the stop is theirs, not the booking's.
+    expect(order(seatCarrierStops(1, [munichHotel(0, { time: '12:00' })], [0], [seam]))).toEqual([
+      'Munich hotel',
+      'departure',
+      'arrival',
+    ]);
+    const overnight = carrierSeam(lh2078({ end_day_id: 2, reservation_end_time: '2026-11-05T07:00' }))!;
+    expect(order(seatCarrierStops(1, [munichHotel(0)], [0], [overnight]))).toEqual(['Munich hotel', 'departure']);
+  });
+
+  it('ROADTRIP-CARRIERS-035: on a day out and back, the stay waits behind the ride that brings the traveller back', () => {
+    const out = carrierSeam(
+      lh2078({ day_plan_position: null, reservation_time: '08:00', reservation_end_time: '09:05' }),
+    )!;
+    const back = carrierSeam(
+      lh2078({
+        id: 78,
+        title: 'LH 2079 MUC-HAM',
+        day_plan_position: null,
+        reservation_time: '18:00',
+        reservation_end_time: '19:05',
+        endpoints: [
+          { role: 'from', sequence: 0, name: 'Munich (MUC)', code: 'MUC', ...MUC_AIRPORT },
+          { role: 'to', sequence: 1, name: 'Hamburg (HAM)', code: 'HAM', ...HAM_AIRPORT },
+        ],
+      }),
+    )!;
+    const hamburgHotel = munichHotel(0, { name: 'Hamburg hotel', ...SPEICHERSTADT });
+    const seated = seatCarrierStops(1, [hamburgHotel], [0], [out, back]);
+    expect(seated.map((s) => (s.carrier ? `${s.carrier.reservationId}:${s.carrier.role}` : s.name))).toEqual([
+      '77:departure',
+      '77:arrival',
+      '78:departure',
+      '78:arrival',
+      'Hamburg hotel',
+    ]);
   });
 });

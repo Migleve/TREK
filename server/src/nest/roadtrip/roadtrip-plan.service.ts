@@ -11,6 +11,8 @@ import {
   carrierLegsFor,
   carrierSeam,
   foldRouteRun,
+  hotelBookendsOn,
+  isStationaryJoin,
   splitIntoRuns,
   spillChains,
   dayWindow,
@@ -19,7 +21,10 @@ import {
   formatDistance,
   formatDurationShort,
   seatCarrierStops,
-  viasLeaving,
+  seatNightBookends,
+  undatedRides,
+  viasOnLeg,
+  type BookendStay,
   type CarrierBooking,
   type CarrierSeam,
   type DistanceUnit,
@@ -77,6 +82,13 @@ interface VisitRow {
   stop_type: string | null;
   fill_percent: number | null;
 }
+/**
+ * A booked night as the road trip reads it: the stay, the days it spans, where it is and
+ * the earliest booking linked to it. The rule reads these for the hotel at the edges of
+ * the days around the night (`seatNightBookends`); get_roadtrip_context reports them as
+ * they are, with the check-in beside the check-out.
+ */
+type StayRow = BookendStay & { check_in: string | null };
 const stopKey = (s: RoadtripStop) =>
   `${s.lat.toFixed(5)},${s.lng.toFixed(5)},${s.legMode ?? ''},${s.incomingLegMode ?? ''}`;
 
@@ -108,9 +120,21 @@ export class RoadtripPlanService {
       WHERE d.trip_id = ? ORDER BY d.day_number, a.order_index, a.created_at`,
       tripId,
     );
+    // Every stay of the trip in id order, the order the rule reads them in, so a browser
+    // holding them in another order still picks the same hotel where two overlap. The
+    // booking is the earliest linked one, the one the planner opens from the hotel's row.
+    const stays = this.db.all<StayRow>(
+      `SELECT a.id, a.place_id, a.start_day_id, a.end_day_id, a.check_in, a.check_out,
+      p.name AS place_name, p.lat AS place_lat, p.lng AS place_lng,
+      (SELECT MIN(r.id) FROM reservations r WHERE r.accommodation_id = a.id) AS reservation_id
+      FROM day_accommodations a LEFT JOIN places p ON p.id = a.place_id
+      WHERE a.trip_id = ? ORDER BY a.id`,
+      tripId,
+    );
     return {
       days,
       visits,
+      stays,
       carriers: this.carriers(tripId),
       settings: this.preferences.read(tripId),
       profiles: this.router.profiles(),
@@ -128,11 +152,35 @@ export class RoadtripPlanService {
    * reservations graph.
    */
   private carriers(tripId: number): CarrierBooking[] {
+    return this.withTerminals(
+      tripId,
+      this.db.all<CarrierRow>(
+        `SELECT id, type, title, day_id, end_day_id, reservation_time, reservation_end_time, metadata, day_plan_position
+         FROM reservations WHERE trip_id = ? AND type IN ('flight', 'train', 'ferry', 'cruise', 'bus', 'car') AND day_id IS NOT NULL`,
+        tripId,
+      ),
+    );
+  }
+
+  /**
+   * The rides the drive leaves out because they are on no day: a flight, train, ferry,
+   * cruise or bus with both terminals located and no day to leave on (#2461). The map
+   * draws their arcs all the same, so the answer names them rather than leaving an
+   * assistant to read a drive around a booked crossing as the plan. Which ones count is
+   * `undatedRides` alone, the rule the planner's rail lists them by, so the statement
+   * names no types of its own.
+   */
+  undatedRides(tripId: number): { id: number; type: string; title: string }[] {
     const rows = this.db.all<CarrierRow>(
       `SELECT id, type, title, day_id, end_day_id, reservation_time, reservation_end_time, metadata, day_plan_position
-       FROM reservations WHERE trip_id = ? AND type IN ('flight', 'train', 'ferry', 'cruise', 'bus', 'car') AND day_id IS NOT NULL`,
+       FROM reservations WHERE trip_id = ? AND day_id IS NULL`,
       tripId,
     );
+    return undatedRides(this.withTerminals(tripId, rows)).map(({ id, type, title }) => ({ id, type, title }));
+  }
+
+  /** The rows with their terminals and the slots the day plan gave them joined on. */
+  private withTerminals(tripId: number, rows: CarrierRow[]): CarrierBooking[] {
     if (!rows.length) return [];
     const endpoints = this.db.all<{
       reservation_id: number;
@@ -174,7 +222,7 @@ export class RoadtripPlanService {
       throw new HttpException({ error: 'Day end must be later than day start.' }, 400);
     const seams = context.carriers.map((booking) => carrierSeam(booking)).filter((seam): seam is CarrierSeam => seam !== null);
     const dayNumberOf = (dayId: number): number => context.days.find((d) => d.id === dayId)?.day_number ?? 0;
-    const plan: PlanDay[] = context.days.map((day) => {
+    const stored: PlanDay[] = context.days.map((day) => {
       const visits = context.visits.filter((v) => v.day_id === day.id && v.lat !== null && v.lng !== null);
       const stops = visits.map(
         (v, index): RoadtripStop => ({
@@ -213,6 +261,13 @@ export class RoadtripPlanService {
         ),
       };
     });
+    // A day after a booked night starts at the stay and a day before one ends there, by
+    // the rule the planner runs in the browser, and only while the trip (or the preview's
+    // own settings) has it switched on. The rides go in with or without their stations,
+    // the way the browser hands over its bookings. Everything below reads the seated days.
+    const plan = hotelBookendsOn(preferences)
+      ? seatNightBookends(stored, context.days, context.stays, context.carriers)
+      : stored;
     const allLegs: Record<string, RoutedLeg> = {};
     const snapByDay: Record<number, Record<string, SnappedWaypoint>> = {};
     const missedByDay: Record<number, RouteAvoidClass[]> = {};
@@ -244,8 +299,9 @@ export class RoadtripPlanService {
       stops.forEach((stop, index) => {
         stopAt.push(points.length);
         points.push({ lat: stop.lat, lng: stop.lng });
+        // None bend the drive from or to a booked night's hotel (`viasOnLeg`).
         if (index < stops.length - 1)
-          points.push(...viasLeaving(stop, context.vias).map((v) => ({ lat: v.lat, lng: v.lng })));
+          points.push(...viasOnLeg(stop, stops[index + 1], context.vias).map((v) => ({ lat: v.lat, lng: v.lng })));
       });
       try {
         if (points.length > 100) throw new Error('Too many waypoints');
@@ -274,7 +330,7 @@ export class RoadtripPlanService {
         });
         Object.assign(
           allLegs,
-          foldRouteRun(stops, stopAt, { coordinates: routed.leg.line, legs, vias: routed.leg.vias }, profile),
+          foldRouteRun(stops, stopAt, { coordinates: routed.leg.line, legs, vias: routed.leg.vias }, profile, distanceUnit),
         );
         missedByDay[dayId] = [...new Set([...(missedByDay[dayId] ?? []), ...routed.avoidMissed])];
         stops.forEach((stop, index) => {
@@ -311,7 +367,8 @@ export class RoadtripPlanService {
       const pairs = chain.stops.slice(0, -1).map((from, index) => ({ from, to: chain.stops[index + 1] }));
       if (connectDays && previous && chain.stops.length) pairs.push({ from: previous, to: chain.stops[0] });
       for (const { from, to } of pairs) {
-        if (asked.has(stopKey(from) + '>' + stopKey(to))) continue;
+        // A night spent at one hotel is no drive, and no router is asked about it.
+        if (isStationaryJoin(from, to) || asked.has(stopKey(from) + '>' + stopKey(to))) continue;
         await fetchRun(
           [from, to],
           chain.dayId,
@@ -359,6 +416,7 @@ export class RoadtripPlanService {
       calculated,
       failures,
       omittedVisits: context.visits.filter((v) => v.lat === null || v.lng === null).map((v) => v.id),
+      undatedRides: this.undatedRides(tripId),
     };
   }
 }

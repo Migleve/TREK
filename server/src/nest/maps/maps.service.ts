@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { isOutsideChina } from '@trek/shared';
+import { isOutsideChina, normalizePlaceWebsite } from '@trek/shared';
 import type {
   MapsSearchResult,
   MapsAutocompleteResult,
@@ -17,6 +17,7 @@ import { isPlacesProviderChoice, type PlacesProviderChoice } from './providers/p
 import {
   AMAP_SHORT_HOSTS,
   AmapPlacesProvider,
+  AmapTipStash,
   isAmapHost,
   isAmapPlaceId,
   parseAmapUrl,
@@ -672,6 +673,17 @@ export const PLACES_PROVIDER_SETTING = 'places_provider';
 export const PLACES_GOOGLE_ONLY_SETTING = 'places_google_only';
 
 /**
+ * A details row as the cache holds it. A row written before #2483 still has a
+ * source's website as it came, `www.hotel.cn` from Amap for one, and keeps for a
+ * week (an expanded one until a refresh), so the website is normalized on the
+ * way out of the cache as well as on the way in.
+ */
+function cachedDetails(payload: string): Record<string, unknown> | null {
+  const place = JSON.parse(payload) as Record<string, unknown> | null;
+  return place && 'website' in place ? { ...place, website: normalizePlaceWebsite(place.website) } : place;
+}
+
+/**
  * Whoever holds the keyed slot beside the index for one request: Google's
  * credential, an Amap provider, or nobody (the OpenStreetMap stack alone).
  */
@@ -701,6 +713,10 @@ export class MapsService {
   /** Brand id → logo bytes, or null for "asked, has none". Insertion-ordered, so the
    *  oldest entry is the one evicted when it fills up. */
   private readonly brandLogoCache = new Map<string, { at: number; logo: BrandLogo | null }>();
+
+  /** Amap autocomplete tips for the details fallback. Here rather than on the provider:
+   *  a provider is built per request, and a pick is two requests. */
+  private readonly amapTips = new AmapTipStash();
 
   private isSettingDisabled(key: string): boolean {
     const row = this.database.get<{ value: string }>(
@@ -967,7 +983,7 @@ export class MapsService {
               category: labelFor(p.category ?? null, p.categoryPath ?? null) ?? wanted[0],
               poi_type: p.category ?? wanted[0],
               address: p.address?.freeform ?? null,
-              website: p.contact?.website ?? null,
+              website: normalizePlaceWebsite(p.contact?.website),
               phone: p.contact?.phone ?? null,
               opening_hours: p.hours?.osm ?? null,
               // The index carries the chain and its Wikidata item, which is what
@@ -1073,7 +1089,7 @@ export class MapsService {
 
     const amap = this.resolveAmapKey(userId);
     return amap.key
-      ? { id: 'amap', provider: new AmapPlacesProvider({ key: amap.key, source: amap.source, userId }) }
+      ? { id: 'amap', provider: new AmapPlacesProvider({ key: amap.key, source: amap.source, userId }, this.amapTips) }
       : null;
   }
 
@@ -1127,7 +1143,7 @@ export class MapsService {
   private providerForPlaceId(userId: number, placeId: string): AmapPlacesProvider | null {
     if (!isAmapPlaceId(placeId)) return null;
     const amap = this.resolveAmapKey(userId);
-    return amap.key ? new AmapPlacesProvider({ key: amap.key, source: amap.source, userId }) : null;
+    return amap.key ? new AmapPlacesProvider({ key: amap.key, source: amap.source, userId }, this.amapTips) : null;
   }
 
   /**
@@ -1488,7 +1504,7 @@ export class MapsService {
         category: categoryOfFilter.get(matched) ?? categories[0],
         poi_type: matched,
         address: addr,
-        website: tags.website || tags['contact:website'] || null,
+        website: normalizePlaceWebsite(tags.website) ?? normalizePlaceWebsite(tags['contact:website']),
         phone: tags.phone || tags['contact:phone'] || null,
         opening_hours: tags.opening_hours || null,
         cuisine: tags.cuisine || null,
@@ -2203,7 +2219,7 @@ export class MapsService {
       lat: p.location?.latitude ?? null,
       lng: p.location?.longitude ?? null,
       rating: p.rating || null,
-      website: p.websiteUri || null,
+      website: normalizePlaceWebsite(p.websiteUri),
       phone: p.nationalPhoneNumber || null,
       types: p.types || [],
       source: 'google',
@@ -2527,7 +2543,7 @@ export class MapsService {
       placeId,
       langKey,
     );
-    if (cached && Date.now() - cached.fetched_at < DETAILS_TTL) return { place: JSON.parse(cached.payload_json) };
+    if (cached && Date.now() - cached.fetched_at < DETAILS_TTL) return { place: cachedDetails(cached.payload_json) };
 
     // Closes the autocomplete session this lookup belongs to, so Google bills
     // the search once instead of per keystroke. A cache hit above never reaches
@@ -2565,7 +2581,7 @@ export class MapsService {
       lng: data.location?.longitude ?? null,
       rating: data.rating || null,
       rating_count: data.userRatingCount || null,
-      website: data.websiteUri || null,
+      website: normalizePlaceWebsite(data.websiteUri),
       phone: data.nationalPhoneNumber || null,
       opening_hours: data.regularOpeningHours?.weekdayDescriptions || null,
       open_now: data.regularOpeningHours?.openNow ?? null,
@@ -2620,7 +2636,7 @@ export class MapsService {
       placeId,
       langKey,
     );
-    if (cached && Date.now() - cached.fetched_at < DETAILS_TTL) return { place: JSON.parse(cached.payload_json) };
+    if (cached && Date.now() - cached.fetched_at < DETAILS_TTL) return { place: cachedDetails(cached.payload_json) };
 
     const place = await provider.placeDetails(placeId, lang);
     if (!place) return { place: null };
@@ -2676,7 +2692,7 @@ export class MapsService {
         placeId,
         langKey,
       );
-      if (cached) return { place: JSON.parse(cached.payload_json) };
+      if (cached) return { place: cachedDetails(cached.payload_json) };
     }
 
     const response = await googleFetch(
@@ -2710,7 +2726,7 @@ export class MapsService {
       lng: data.location?.longitude ?? null,
       rating: data.rating || null,
       rating_count: data.userRatingCount || null,
-      website: data.websiteUri || null,
+      website: normalizePlaceWebsite(data.websiteUri),
       phone: data.nationalPhoneNumber || null,
       opening_hours: data.regularOpeningHours?.weekdayDescriptions || null,
       open_now: data.regularOpeningHours?.openNow ?? null,

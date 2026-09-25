@@ -81,6 +81,8 @@ On screens narrower than 768 px, TREK does not squeeze the three-pane layout —
 
 The planner tracks your recent actions — adding places, assigning them to days, reordering, and removing assignments — in a short undo ring. The **Undo** button sits in the Day Plan Sidebar toolbar (at the top of the sidebar); it is greyed out until an undoable action is available. It shows the name of the last action as a tooltip on hover and reverses it when clicked.
 
+Deleting a day is not in the ring. The question before the delete lists what goes with the day instead; see [Deleting a day](Day-Plans-and-Notes#deleting-a-day). An earlier reorder of the days can still be undone afterwards, minus the day that is gone.
+
 ## Splash Screen
 
 When you first open a trip, a brief loading screen appears while the planner data and place photos are fetched. This screen shows the trip title and a loading animation. Once data is ready and a short grace period for photos has elapsed, the planner workspace appears.
@@ -108,7 +110,11 @@ Driving settings includes **Show hazard areas**, off by default and shared by th
 - [Reservations-and-Bookings](Reservations-and-Bookings)
 - [Admin-Addons](Admin-Addons)
 
-Driving settings also controls **Show in Days too** under **Service stops**. It is on by default and applies to every service stop in the trip, including existing stops. Turn it off to keep service stops exclusively in the Roadtrip view and omit them from the normal Days view and its route. Turning it on restores their visibility without creating duplicates. The setting is shared with fellow travellers and can also be changed through `update_roadtrip_settings` using `roadtrip_service_stops_in_days`.
+Driving settings also controls **Show in Days too** under **Service stops**. It is on by default and applies to every service stop in the trip, including existing stops. Turn it off to keep service stops exclusively in the Roadtrip view and omit them from the normal Days view and its route. Hotels, and any place a booking points at, stay in the places list and on the Days map either way. Turning it on restores their visibility without creating duplicates. The setting is shared with fellow travellers and can also be changed through `update_roadtrip_settings` using `roadtrip_service_stops_in_days`.
+
+**Start and end each day at your stay**, under **Route line** in Driving settings, starts each Roadtrip day after a booked night at that hotel and ends each day before one there. It is off by default and shared by the trip. The hotel rows are drawn from the booking, not stored as stops, so the Days view stays as it is and switching it off gives the drive exactly as before. On the phone it is the one switch in **Driving figures**. See [Road-Trip](Road-Trip#starting-and-ending-the-day-at-the-stay).
+
+> **AI / MCP:** Set `roadtrip_hotel_bookends` through `update_roadtrip_settings`; a missing value means off. `calculate_roadtrip` returns the hotel rows as stops carrying `bookend`.
 
 **Looking for** in Roadtrip also searches installed place-search plugins. Plugin results show their source and can be added like other stops. Search remains online-only and runs on request. Results outside the chosen corridor are removed, and failed sources are shown beside the remaining results. It opens on Charging when the trip's vehicle is electric and on Fuel otherwise, and the choice is yours from then on.
 

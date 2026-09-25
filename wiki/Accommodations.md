@@ -53,6 +53,10 @@ A few details worth knowing:
 
 - Only the check-in day gets a stop, however many nights the stay runs. That is the day
   you travel there; the later nights keep showing as badges in the day header.
+- The Road Trip view can also start each day after a night at the hotel and end each day
+  before one there, with **Start and end each day at your stay** in its driving
+  settings. The switch is off by default, stores no extra stop and leaves **Days** as it
+  is. See [Road Trip](Road-Trip#starting-and-ending-the-day-at-the-stay).
 - The stop leads its check-in day. It is seated first, behind only a stop whose own time
   is at or before the check-in, and the stops that carry no hour follow it. A night
   without a check-in is seated first too, a new check-in seats the stop afresh, and two
@@ -73,13 +77,24 @@ A few details worth knowing:
   placed, and the booking simply rides along with it.
 - Moving the booking to a different check-in day moves its stop with it. Deleting the
   booking removes the stop it created, and leaves a stop you placed yourself standing.
-- Hotels are service stops, so **Show in Days too** under **Service stops** in the Road
-  Trip settings also decides whether they appear in the places list.
+- Hotels count as service stops on the drive, so **Show in Days too** under **Service
+  stops** in the Road Trip settings decides whether the hotel's stop shows in the day list.
+  The hotel itself always stays in the places list, on the Days map and in the booking
+  forms, whatever the switch says.
 
 Nights booked before this existed are given their stop when the server upgrades, so trips
 you already have show their hotels on the drive without anyone re-saving anything. Trips
 planned before 4.3.1 are seated the same way on upgrade, see
 [Upgrading to 4.3.1](Updating#upgrading-to-431).
+
+## When a check-in or check-out day goes
+
+A stay is tied to its check-in and check-out day, so it cannot outlive either of them. What happens to its booking depends on how the day goes:
+
+- **Deleting the day** in the **Reorder days** dialog cancels the stay cleanly, together with its Hotel booking and the expense of that booking. The question before the delete shows this line in red. See [Deleting a day](Day-Plans-and-Notes#deleting-a-day).
+- **Shortening the trip** removes the whole stay, also its nights that are still part of the trip, but leaves its booking under Bookings and its expense under Costs. The trip dialog shows the stay in red before it saves. See [Shortening a trip](Day-Plans-and-Notes#shortening-a-trip).
+
+A stay that only runs across a deleted day, with its check-in before and its check-out after it, is kept, one night shorter: its check-out day moves up with the days after the deleted one. The question before the delete names the stay and its new check-out date. Its Hotel booking is not changed, so a booking made with the hotel itself may need the same change there.
 
 ## In the day plan sidebar
 
